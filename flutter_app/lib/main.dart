@@ -5,7 +5,7 @@ void main() {
   runApp(MaterialApp(
     home: Scaffold(
       body: WebView(
-        initialUrl: "https://your-app.onrender.com",  // ← TWÓJ HOST
+        initialUrl: "https://gonzo-on-motorway.onrender.com",  // ← TWÓJ HOST
         javascriptMode: JavascriptMode.unrestricted,
       ),
     ),
