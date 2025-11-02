@@ -1,0 +1,36 @@
+name: Build Flutter APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.13.0'
+
+      - name: Enable Flutter WebView support
+        run: flutter config --enable-web
+
+      - name: Navigate to Flutter project
+        working-directory: ./flutter_webview_apk
+        run: flutter pub get
+
+      - name: Build APK
+        working-directory: ./flutter_webview_apk
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-apk
+          path: flutter_webview_apk/build/app/outputs/flutter-apk/app-release.apk
