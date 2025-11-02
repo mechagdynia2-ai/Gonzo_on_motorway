@@ -25,7 +25,7 @@ class WebViewPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text("WebView App")),
       body: const WebView(
-        initialUrl: 'https://www.example.com',
+        initialUrl: 'https://gonzo-on-motorway.onrender.com',
         javascriptMode: JavascriptMode.unrestricted,
       ),
     );
