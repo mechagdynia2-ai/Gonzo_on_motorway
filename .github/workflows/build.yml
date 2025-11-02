@@ -8,6 +8,7 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,49 +18,76 @@ jobs:
         with:
           flutter-version: '3.22.0'
 
+      - name: Debug tree (optional, helps if it fails)
+        run: |
+          echo "== repo root =="
+          ls -la
+          echo "== flutter_webview_apk =="
+          ls -la flutter_webview_apk || true
+          echo "== flutter_webview_apk/lib =="
+          ls -la flutter_webview_apk/lib || true
+
+      # 1) Utwórz świeży projekt Flutter (Embedding v2) w /tmp/app
       - name: Create fresh Flutter app (Embedding v2)
         run: flutter create -t app /tmp/app
 
+      # 2) Podmień main.dart i pubspec.yaml z repo (lub użyj minimalnych awaryjnych)
       - name: Copy your sources into fresh app
         run: |
           set -eux
           # lib/main.dart (TWÓJ WebView)
-          test -f flutter_webview_apk/lib/main.dart
-          cp -f flutter_webview_apk/lib/main.dart /tmp/app/lib/main.dart
+          if [ -f flutter_webview_apk/lib/main.dart ]; then
+            cp -f flutter_webview_apk/lib/main.dart /tmp/app/lib/main.dart
+          else
+            printf "%s\n" \
+"import 'package:flutter/material.dart';" \
+"import 'package:webview_flutter/webview_flutter.dart';" \
+"void main()=>runApp(const MaterialApp(debugShowCheckedModeBanner:false,home:WebViewPage()));" \
+"class WebViewPage extends StatelessWidget{const WebViewPage({super.key});@override Widget build(BuildContext c){return const Scaffold(body:SafeArea(child:WebView(initialUrl:'https://example.com',javascriptMode:JavascriptMode.unrestricted,)));}}" \
+            > /tmp/app/lib/main.dart
+          fi
 
-          # pubspec.yaml (z webview_flutter)
+          # pubspec.yaml (zależność webview_flutter)
           if [ -f flutter_webview_apk/pubspec.yaml ]; then
             cp -f flutter_webview_apk/pubspec.yaml /tmp/app/pubspec.yaml
           else
-            cat > /tmp/app/pubspec.yaml <<'YML'
-name: flutter_webview_apk
-description: WebView loader for Flet app
-publish_to: 'none'
-version: 1.0.0+1
-environment:
-  sdk: ">=3.0.0 <4.0.0"
-dependencies:
-  flutter:
-    sdk: flutter
-  webview_flutter: ^4.5.0
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-flutter:
-  uses-material-design: true
-YML
+            printf "%s\n" \
+"name: flutter_webview_apk" \
+"description: WebView loader for Flet app" \
+"publish_to: 'none'" \
+"version: 1.0.0+1" \
+"" \
+"environment:" \
+"  sdk: \">=3.0.0 <4.0.0\"" \
+"" \
+"dependencies:" \
+"  flutter:" \
+"    sdk: flutter" \
+"  webview_flutter: ^4.5.0" \
+"" \
+"dev_dependencies:" \
+"  flutter_test:" \
+"    sdk: flutter" \
+"" \
+"flutter:" \
+"  uses-material-design: true" \
+            > /tmp/app/pubspec.yaml
           fi
 
-          # opcjonalna ikona
+          # Ikona (opcjonalnie)
           if [ -f flutter_webview_apk/icon.png ]; then
             cp -f flutter_webview_apk/icon.png /tmp/app/icon.png
           fi
 
+      # 3) Dodaj INTERNET permission do AndroidManifest (po flutter create istnieje plik v2)
       - name: Ensure INTERNET permission
         run: |
           MANIFEST=/tmp/app/android/app/src/main/AndroidManifest.xml
-          grep -q 'android.permission.INTERNET' "$MANIFEST" || \
-          sed -i '1 s|<manifest|<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n  <uses-permission android:name="android.permission.INTERNET"/>\n|' "$MANIFEST"
+          if ! grep -q 'uses-permission android:name="android.permission.INTERNET"' "$MANIFEST"; then
+            # wstaw <uses-permission .../> tuż po otwarciu <manifest>
+            awk 'NR==1{print; print "    <uses-permission android:name=\"android.permission.INTERNET\"/>"; next}1' "$MANIFEST" > "$MANIFEST.tmp"
+            mv "$MANIFEST.tmp" "$MANIFEST"
+          fi
 
       - name: flutter pub get
         working-directory: /tmp/app
