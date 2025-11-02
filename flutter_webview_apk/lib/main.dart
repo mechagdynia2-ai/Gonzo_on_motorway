@@ -7,7 +7,7 @@ void main() {
     home: Scaffold(
       body: SafeArea(
         child: WebView(
-          initialUrl: "https://twoja-aplikacja.onrender.com",
+          initialUrl: "https://gonzo-on-motorway.onrender.com",
           javascriptMode: JavascriptMode.unrestricted,
         ),
       ),
