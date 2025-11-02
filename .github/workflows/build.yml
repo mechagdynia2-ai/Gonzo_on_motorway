@@ -1,4 +1,4 @@
-name: Build Flutter APK (minimal)
+name: Build Flutter APK (from your WebView)
 
 on:
   workflow_dispatch:
@@ -21,27 +21,14 @@ jobs:
       - name: Create fresh Flutter app (Embedding v2)
         run: flutter create -t app /tmp/app
 
-      - name: Get packages
-        working-directory: /tmp/app
-        run: flutter pub get
-
-      - name: Build APK (release)
-        working-directory: /tmp/app
-        run: flutter build apk --release
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-release.apk
-          path: /tmp/app/build/app/outputs/flutter-apk/app-release.apk
-                - name: Copy your WebView sources into fresh app
+      - name: Copy your WebView sources into fresh app
         run: |
           set -eux
           # skopiuj Twój main.dart (WebView)
           cp -f flutter_webview_apk/lib/main.dart /tmp/app/lib/main.dart
           # skopiuj Twój pubspec.yaml (z webview_flutter)
           cp -f flutter_webview_apk/pubspec.yaml /tmp/app/pubspec.yaml
-          # opcjonalnie ikona
+          # (opcjonalnie) ikona
           if [ -f flutter_webview_apk/icon.png ]; then
             cp -f flutter_webview_apk/icon.png /tmp/app/icon.png
           fi
@@ -52,3 +39,8 @@ jobs:
           flutter pub get
           flutter build apk --release
 
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release.apk
+          path: /tmp/app/build/app/outputs/flutter-apk/app-release.apk
