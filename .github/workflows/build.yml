@@ -34,3 +34,21 @@ jobs:
         with:
           name: app-release.apk
           path: /tmp/app/build/app/outputs/flutter-apk/app-release.apk
+                - name: Copy your WebView sources into fresh app
+        run: |
+          set -eux
+          # skopiuj Twój main.dart (WebView)
+          cp -f flutter_webview_apk/lib/main.dart /tmp/app/lib/main.dart
+          # skopiuj Twój pubspec.yaml (z webview_flutter)
+          cp -f flutter_webview_apk/pubspec.yaml /tmp/app/pubspec.yaml
+          # opcjonalnie ikona
+          if [ -f flutter_webview_apk/icon.png ]; then
+            cp -f flutter_webview_apk/icon.png /tmp/app/icon.png
+          fi
+
+      - name: Get packages & Build APK
+        working-directory: /tmp/app
+        run: |
+          flutter pub get
+          flutter build apk --release
+
