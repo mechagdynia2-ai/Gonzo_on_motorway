@@ -8,7 +8,6 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,33 +15,22 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0'   # stabilna linia 3.x
+          flutter-version: '3.22.0'
 
-      # 1) Utwórz świeży projekt Flutter (Embedding v2) w /tmp/app
       - name: Create fresh Flutter app (Embedding v2)
-        run: |
-          flutter --version
-          flutter create -t app /tmp/app
+        run: flutter create -t app /tmp/app
 
-      # 2) Podmień main.dart, pubspec.yaml i ewentualnie icon.png z Twojego repo
-      #    Zakładamy, że masz je w: flutter_webview_apk/lib/main.dart i flutter_webview_apk/pubspec.yaml
       - name: Copy your sources into fresh app
         run: |
           set -eux
-          # lib/main.dart
-          if [ -f flutter_webview_apk/lib/main.dart ]; then
-            mkdir -p /tmp/app/lib
-            cp -f flutter_webview_apk/lib/main.dart /tmp/app/lib/main.dart
-          else
-            echo "Brak flutter_webview_apk/lib/main.dart – dodaj swój WebView!"
-            exit 2
-          fi
+          # lib/main.dart (TWÓJ WebView)
+          test -f flutter_webview_apk/lib/main.dart
+          cp -f flutter_webview_apk/lib/main.dart /tmp/app/lib/main.dart
 
-          # pubspec.yaml (zależność webview_flutter + ewentualne flutter_launcher_icons)
+          # pubspec.yaml (z webview_flutter)
           if [ -f flutter_webview_apk/pubspec.yaml ]; then
             cp -f flutter_webview_apk/pubspec.yaml /tmp/app/pubspec.yaml
           else
-            # Minimalny awaryjny pubspec z webview_flutter
             cat > /tmp/app/pubspec.yaml <<'YML'
 name: flutter_webview_apk
 description: WebView loader for Flet app
@@ -62,44 +50,25 @@ flutter:
 YML
           fi
 
-          # Ikona (opcjonalnie)
+          # opcjonalna ikona
           if [ -f flutter_webview_apk/icon.png ]; then
             cp -f flutter_webview_apk/icon.png /tmp/app/icon.png
           fi
 
-      # 3) Dodaj INTERNET permission do AndroidManifest (po flutter create istnieje)
-      - name: Ensure INTERNET permission in AndroidManifest
+      - name: Ensure INTERNET permission
         run: |
           MANIFEST=/tmp/app/android/app/src/main/AndroidManifest.xml
           grep -q 'android.permission.INTERNET' "$MANIFEST" || \
           sed -i '1 s|<manifest|<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n  <uses-permission android:name="android.permission.INTERNET"/>\n|' "$MANIFEST"
 
-      # 4) Pobierz zależności
-      - name: Flutter pub get
+      - name: flutter pub get
         working-directory: /tmp/app
         run: flutter pub get
 
-      # 5) (Opcjonalnie) wygeneruj ikonę, jeśli dodałaś flutter_launcher_icons i icon.png
-      - name: Generate launcher icons (optional)
-        if: ${{ hashFiles('flutter_webview_apk/icon.png') != '' }}
-        working-directory: /tmp/app
-        run: |
-          # jeżeli w Twoim pubspec.yaml dodałaś:
-          # dev_dependencies:
-          #   flutter_launcher_icons: ^0.13.1
-          # flutter_icons:
-          #   android: true
-          #   ios: false
-          #   image_path: "icon.png"
-          flutter pub get
-          flutter pub run flutter_launcher_icons:main || true
-
-      # 6) Build APK (release)
       - name: Build APK (release)
         working-directory: /tmp/app
         run: flutter build apk --release
 
-      # 7) Upload artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
