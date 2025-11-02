@@ -1,4 +1,4 @@
-name: Build Flutter WebView APK
+name: Build Flutter APK (minimal)
 
 on:
   workflow_dispatch:
@@ -18,96 +18,10 @@ jobs:
         with:
           flutter-version: '3.22.0'
 
-      - name: Debug tree (optional)
-        run: |
-          echo "== repo root =="
-          ls -la
-          echo "== flutter_webview_apk =="
-          ls -la flutter_webview_apk || true
-          echo "== flutter_webview_apk/lib =="
-          ls -la flutter_webview_apk/lib || true
-          echo "== flutter_webview_apk/pubspec.yaml =="
-          [ -f flutter_webview_apk/pubspec.yaml ] && cat flutter_webview_apk/pubspec.yaml || echo "brak"
-
       - name: Create fresh Flutter app (Embedding v2)
         run: flutter create -t app /tmp/app
 
-      - name: Copy your sources into fresh app (or create minimal)
-        run: |
-          set -eux
-          # main.dart
-          if [ -f flutter_webview_apk/lib/main.dart ]; then
-            cp -f flutter_webview_apk/lib/main.dart /tmp/app/lib/main.dart
-          else
-            mkdir -p /tmp/app/lib
-            cat > /tmp/app/lib/main.dart <<'DART'
-import 'package:flutter/material.dart';
-import 'package:webview_flutter/webview_flutter.dart';
-
-void main() => runApp(const MaterialApp(
-  debugShowCheckedModeBanner: false,
-  home: WebViewPage(),
-));
-
-class WebViewPage extends StatelessWidget {
-  const WebViewPage({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      body: SafeArea(
-        child: WebView(
-          initialUrl: 'https://example.com', // <- podmień na URL z Render
-          javascriptMode: JavascriptMode.unrestricted,
-        ),
-      ),
-    );
-  }
-}
-DART
-          fi
-
-          # pubspec.yaml
-          if [ -f flutter_webview_apk/pubspec.yaml ]; then
-            cp -f flutter_webview_apk/pubspec.yaml /tmp/app/pubspec.yaml
-          else
-            cat > /tmp/app/pubspec.yaml <<'YML'
-name: flutter_webview_apk
-description: WebView loader for Flet app
-publish_to: 'none'
-version: 1.0.0+1
-
-environment:
-  sdk: ">=3.0.0 <4.0.0"
-
-dependencies:
-  flutter:
-    sdk: flutter
-  webview_flutter: ^4.5.0
-
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-
-flutter:
-  uses-material-design: true
-YML
-          fi
-
-          # opcjonalna ikona
-          if [ -f flutter_webview_apk/icon.png ]; then
-            cp -f flutter_webview_apk/icon.png /tmp/app/icon.png
-          fi
-
-      - name: Ensure INTERNET permission in AndroidManifest
-        run: |
-          MANIFEST=/tmp/app/android/app/src/main/AndroidManifest.xml
-          if ! grep -q 'android.permission.INTERNET' "$MANIFEST"; then
-            tmp="$(mktemp)"
-            awk 'NR==1{print; print "    <uses-permission android:name=\"android.permission.INTERNET\"/>"; next}1' "$MANIFEST" > "$tmp"
-            mv "$tmp" "$MANIFEST"
-          fi
-
-      - name: flutter pub get
+      - name: Get packages
         working-directory: /tmp/app
         run: flutter pub get
 
