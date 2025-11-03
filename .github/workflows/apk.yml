@@ -52,7 +52,7 @@ jobs:
 
       - name: Build APK (Flet)
         run: |
-          flet build apk --clean --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION
+          flet build apk --clear-cache --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION
 
       - name: Show outputs (debug)
         run: |
