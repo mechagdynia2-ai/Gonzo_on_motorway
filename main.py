@@ -3,7 +3,14 @@ from flet import canvas as cv
 from dataclasses import dataclass
 from collections import defaultdict
 
-# --- Config ---
+# ---- Audio migration: use flet-audio if available (no deprecation warnings) ----
+try:
+    from flet_audio import Audio as FAudio
+    AudioCtrl = FAudio           # new Audio control
+except Exception:
+    AudioCtrl = ft.Audio         # fallback to deprecated ft.Audio (still works)
+
+# --- Config (start; will be recomputed on resize) ---
 W, H, GRID = 800, 600, 40
 LANES_Y = [GRID * 4, GRID * 6, GRID * 8, GRID * 10]
 START_X, START_Y, PLAYER_SIZE = GRID * 5, GRID * 13, GRID
@@ -81,7 +88,6 @@ class GonzoGame:
         "LOOK_RIGHT": "assets/LOOK.RIGHT.05.png",
     }
 
-    # pełna lista do idle-random
     ALL_SPRITES_FOR_IDLE = [
         "assets/01.STEP.FRONT.03.png",
         "assets/02.STEP.FRONT.07.png",
@@ -96,10 +102,14 @@ class GonzoGame:
 
     def __init__(self, page: ft.Page):
         self.p = page
-        self.p.title = "Gonzo on Motorway — Flet (Canvas + Audio + Sprites)"
+        self.p.title = "Gonzo on Motorway — Flet (Responsive Canvas + Audio + Sprites)"
         self.p.on_keyboard_event = self.on_key
         self.p.padding = 0
         self.p.window_maximized = True
+
+        # Reakcja na zmianę rozmiaru (telefon/rotacja)
+        self.p.on_resize = self._on_resize
+
         self.p.appbar = ft.AppBar(
             title=ft.Text("Gonzo on Motorway"),
             center_title=False,
@@ -107,17 +117,18 @@ class GonzoGame:
             actions=[ft.TextButton("Zamknij", on_click=lambda e: self.exit_game())],
         )
 
-        # --- AUDIO (jak wcześniej) ---
+        # --- AUDIO ---
         self._sfx_pool_idx = {"honk": 0, "step": 0}
         self.sfx = {
-            "hit":   [ft.Audio(src="assets/hit.wav", volume=1.0)],
-            "level": [ft.Audio(src="assets/level.wav", volume=1.0)],
-            "honk":  [ft.Audio(src="assets/honk.wav", volume=0.5) for _ in range(3)],
-            "step":  [ft.Audio(src="assets/step.wav", volume=0.35) for _ in range(2)],
+            "hit":   [AudioCtrl(src="assets/hit.wav", volume=1.0)],
+            "level": [AudioCtrl(src="assets/level.wav", volume=1.0)],
+            "honk":  [AudioCtrl(src="assets/honk.wav", volume=0.5) for _ in range(3)],
+            "step":  [AudioCtrl(src="assets/step.wav", volume=0.35) for _ in range(2)],
         }
-        self._bgm_tracks = [f"assets/audio{str(i).zfill(2)}.mp3" for i in range(1, 9)]
+        # nowe pliki tła: audio01.wav ... audio08.wav
+        self._bgm_tracks = [f"assets/audio{str(i).zfill(2)}.wav" for i in range(1, 9)]
         self._last_bgm = None
-        self.bgm = ft.Audio(src=self._pick_next_bgm(), volume=0.25, autoplay=True)
+        self.bgm = AudioCtrl(src=self._pick_next_bgm(), volume=0.25, autoplay=True)
         self.bgm.on_ended = lambda e: self._bgm_next()
         for lst in self.sfx.values():
             for a in lst:
@@ -140,50 +151,43 @@ class GonzoGame:
         self.level = 1; self.score = 0; self.lives = 4; self.game_over = False; self.tick = 0
         self.checkpoint_level = 1; self.checkpoint_score = 0
 
-        # --- PLAYER: Container + Image (80→40 skalowane) ---
-        self.player_img = ft.Image(
-            src=self.SPRITES["START"],
-            width=PLAYER_SIZE, height=PLAYER_SIZE,
-            fit=ft.ImageFit.CONTAIN
-        )
-        self.player = ft.Container(
-            left=START_X, top=START_Y, width=PLAYER_SIZE, height=PLAYER_SIZE,
-            content=self.player_img
-        )
+        # --- PLAYER: Image w Containerze (skalowane) ---
+        self.player_img = ft.Image(src=self.SPRITES["START"], fit=ft.ImageFit.CONTAIN)
+        self.player = ft.Container(content=self.player_img)
 
         # animacja sprita
         self.anim_tick_acc = 0
         self.last_move_tick = 0
-        self.move_anim_until = 0        # do kiedy ma trwać animacja po ruchu (żeby mignęło kilka klatek)
-        self.current_dir = "front"       # 'front'|'back'|'left'|'right'
+        self.move_anim_until = 0
+        self.current_dir = "front"
         self.step_front_idx = 0
         self.left_cycle_idx = 0
         self.right_cycle_idx = 0
         self.back_toggle = False
         self.honk_until = 0
 
-        # HUD
-        self.txt_level = ft.Text(size=16, color="#fff")
-        self.txt_speed = ft.Text(size=16, color="#a3e635")
-        self.txt_score = ft.Text(size=16, color="#fff")
+        # HUD (rozmiary ustawiane responsywnie)
+        self.txt_level = ft.Text()
+        self.txt_speed = ft.Text()
+        self.txt_score = ft.Text()
         self.hearts_row = ft.Row(spacing=4)
         self.btn_mute = ft.IconButton(
             icon=ft.Icons.VOLUME_UP, tooltip="Mute/Unmute (M)",
             on_click=lambda e: self.toggle_mute()
         )
-        hud = ft.Container(
+        self.hud = ft.Container(
             content=ft.Row(
                 [self.txt_level, ft.Container(width=10), self.txt_speed,
                  ft.Container(expand=True), self.btn_mute,
                  ft.Container(width=12), self.txt_score, ft.Container(width=12), self.hearts_row],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN
-            ), padding=10
+            )
         )
 
         # overlays
-        self.death_msg = ft.Text("", size=18, weight=ft.FontWeight.W_700, color="#ff453a", visible=False)
-        self.center_prompt = ft.Text("", size=18, weight=ft.FontWeight.W_700, color="#fff", visible=False)
-        self.level_banner = ft.Text("", size=22, weight=ft.FontWeight.W_700, color="#ffd166", visible=False)
+        self.death_msg = ft.Text(visible=False)
+        self.center_prompt = ft.Text(visible=False)
+        self.level_banner = ft.Text(visible=False)
         self.banner_ticks = 0
         self.btn_restart_cp = ft.ElevatedButton(
             "Restart (checkpoint)",
@@ -191,28 +195,176 @@ class GonzoGame:
             bgcolor="#22c55e", color="#0b1014", visible=False
         )
 
-        # dpad
-        self.dpad = self._build_dpad()
+        # D-pad (tworzony responsywnie)
+        self.dpad = None
 
         # świat
         self.cars: list[Car] = []
         self.stains: list[BloodStain] = []
 
-        self.canvas = cv.Canvas(width=W, height=H, shapes=[])
+        self.canvas = cv.Canvas(shapes=[])
         self.world = ft.Stack(
-            width=W, height=H,
             controls=[
                 self.canvas,
                 self.player, self.death_msg, self.center_prompt, self.level_banner,
-                self.dpad,
-                ft.Container(content=self.btn_restart_cp, left=W/2-130, top=H/2-20, width=260, height=40, alignment=ft.alignment.center),
+                # dpad wstawiany po przeliczeniu layoutu,
+                ft.Container(content=self.btn_restart_cp, alignment=ft.alignment.center),
             ]
         )
 
-        self.p.add(ft.Column([hud, ft.Container(content=self.world, expand=True)], spacing=0, expand=True))
+        self.root = ft.Column([self.hud, ft.Container(content=self.world, expand=True)], spacing=0, expand=True)
+        self.p.add(self.root)
+        self.p.update()
+
+        # inicjalny layout (po update width/height są już znane)
+        self._recalc_layout(initial=True, size=(self.p.width or 800, self.p.height or 600))
         self.reset_player(); self.create_cars(); self.update_hud(); self.p.update()
         self.show_level_banner()
         self.redraw_canvas()
+
+    # ---- RESPONSYWNOŚĆ ----
+    def _on_resize(self, e: ft.ControlEvent):
+        # e.width, e.height – aktualne wymiary strony
+        self._recalc_layout(size=(e.width, e.height))
+
+    def _recalc_layout(self, initial=False, size: tuple[int, int] | None = None):
+        """Dopasuj W,H,GRID itd. do rozmiaru ekranu; przeskaluj elementy."""
+        global W, H, GRID, PLAYER_SIZE, START_X, START_Y, LANES_Y, MIN_GAP
+
+        oldW, oldGRID = W, GRID
+
+        if size is not None:
+            win_w, win_h = size
+        else:
+            win_w = self.p.width or 800
+            win_h = self.p.height or 600
+
+        # Szacunkowa wysokość HUD
+        hud_h = max(56, int(win_h * 0.08))
+        self.hud.padding = 10
+        self.hud.update()
+
+        # Obszar dla świata
+        avail_w = win_w
+        avail_h = max(240, win_h - hud_h)
+
+        # Proporcje 4:3
+        target_ratio = 4 / 3
+        world_w = min(avail_w, int(avail_h * target_ratio))
+        world_h = int(world_w / target_ratio)
+
+        # Nowy GRID
+        W, H = world_w, world_h
+        GRID = max(24, int(H / 15))   # min 24 px, by UI nie było za małe
+        PLAYER_SIZE = GRID
+        START_X, START_Y = GRID * 5, GRID * 13
+        LANES_Y = [GRID * 4, GRID * 6, GRID * 8, GRID * 10]
+        MIN_GAP = int(GRID * 0.75)
+
+        # Rozmiary czcionek / UI
+        base_txt = max(12, int(GRID * 0.40))
+        self.txt_level.size = base_txt
+        self.txt_speed.size = base_txt
+        self.txt_score.size = base_txt
+        self.death_msg.size = max(14, int(GRID * 0.45))
+        self.center_prompt.size = max(14, int(GRID * 0.45))
+        self.level_banner.size = max(16, int(GRID * 0.55))
+
+        # Kolory
+        self.txt_level.color = "#fff"
+        self.txt_speed.color = "#a3e635"
+        self.txt_score.color = "#fff"
+        self.death_msg.color = "#ff453a"
+        self.level_banner.color = "#ffd166"
+        self.center_prompt.color = "#fff"
+
+        # Ustaw rozmiar Canvas / World
+        self.canvas.width = W
+        self.canvas.height = H
+        self.world.width = W
+        self.world.height = H
+
+        # Pozycje overlayów zależne od W,H
+        self.level_banner.left = W / 2 - 80
+        self.level_banner.top = GRID - 6
+
+        self.center_prompt.left = max(8, W / 2 - 210)
+        self.center_prompt.top = H / 2 - int(GRID * 1.8)
+
+        # Przyciski Restart
+        self.btn_restart_cp.width = int(GRID * 6.5)
+        self.btn_restart_cp.height = int(GRID * 1.0)
+
+        # D-pad: przebuduj (usuń stary, wstaw nowy)
+        if self.dpad and self.dpad in self.world.controls:
+            self.world.controls.remove(self.dpad)
+        self.dpad = self._build_dpad_responsive()
+        self.world.controls.insert(5, self.dpad)  # przed kontenerem restartu
+        self.world.update()
+
+        # Skalowanie gracza (rozmiar + pozycja do nowej siatki)
+        self.player.width = PLAYER_SIZE
+        self.player.height = PLAYER_SIZE
+        self.player_img.width = PLAYER_SIZE
+        self.player_img.height = PLAYER_SIZE
+
+        if not initial and oldGRID > 0 and oldW > 0:
+            gx = round((self.player.left or START_X) / oldGRID)
+            gy = round((self.player.top or START_Y) / oldGRID)
+            self.player.left = max(0, min(W - PLAYER_SIZE, gx * GRID))
+            self.player.top = max(0, min(H - PLAYER_SIZE, gy * GRID))
+        else:
+            self.player.left = START_X
+            self.player.top = START_Y
+        self.player.update()
+        self.player_img.update()
+
+        # Skalowanie aut
+        if self.cars:
+            sx = W / oldW if oldW else 1.0
+            sg = GRID / oldGRID if oldGRID else 1.0
+            for car in self.cars:
+                car.x *= sx
+                car_y_idx = round(car.y / (oldGRID or GRID))
+                car.y = car_y_idx * GRID
+                car.length *= sg
+
+        self.redraw_canvas()
+        self.update_hud()
+        self.p.update()
+
+    def _build_dpad_responsive(self):
+        btn_size = int(GRID * 1.3)
+        gap = max(4, int(GRID * 0.15))
+        pad = max(8, int(GRID * 0.35))
+
+        base_left = W - (btn_size * 3 + gap * 2) - pad
+        base_top = H - (btn_size * 3 + gap * 2) - pad
+
+        def btn(icon, dx, dy, left, top):
+            return ft.Container(
+                left=left, top=top, width=btn_size, height=btn_size,
+                bgcolor=ft.Colors.with_opacity(0.15, "#ffffff"),
+                border_radius=999,
+                content=ft.IconButton(
+                    icon=icon,
+                    on_click=lambda e, dx=dx, dy=dy: self.p.run_task(self.move_player, dx, dy),
+                    style=ft.ButtonStyle(shape=ft.CircleBorder()),
+                    tooltip="Move",
+                ),
+                shadow=ft.BoxShadow(blur_radius=8, spread_radius=0, color=ft.Colors.with_opacity(0.25, "#000000"))
+            )
+        up    = btn(ft.Icons.KEYBOARD_ARROW_UP,    0, -1, base_left + btn_size + gap, base_top)
+        leftb = btn(ft.Icons.KEYBOARD_ARROW_LEFT, -1,  0, base_left,                  base_top + btn_size + gap)
+        rightb= btn(ft.Icons.KEYBOARD_ARROW_RIGHT, 1,  0, base_left + 2*btn_size + 2*gap, base_top + btn_size + gap)
+        down  = btn(ft.Icons.KEYBOARD_ARROW_DOWN,  0,  1, base_left + btn_size + gap, base_top + 2*btn_size + 2*gap)
+
+        cross = ft.Container(
+            left=base_left, top=base_top,
+            width=btn_size * 3 + gap * 2, height=btn_size * 3 + gap * 2,
+            bgcolor=ft.Colors.with_opacity(0.05, "#ffffff"), border_radius=16
+        )
+        return ft.Stack(controls=[cross, up, leftb, rightb, down])
 
     # ---- AUDIO helpers ----
     def _pick_next_bgm(self):
@@ -227,30 +379,6 @@ class GonzoGame:
             self.bgm.volume = 0.25; self.btn_mute.icon = ft.Icons.VOLUME_UP
         self.bgm.update(); self.btn_mute.update()
 
-    # ---- UI helpers ----
-    def _build_dpad(self):
-        btn_size = 52; gap = 6
-        base_left = W - (btn_size * 3 + gap * 2) - 14
-        base_top = H - (btn_size * 3 + gap * 2) - 14
-        def btn(icon, dx, dy, left, top):
-            return ft.Container(
-                left=left, top=top, width=btn_size, height=btn_size,
-                bgcolor=ft.Colors.with_opacity(0.15, "#ffffff"),
-                border_radius=999,
-                content=ft.IconButton(
-                    icon=icon, on_click=lambda e, dx=dx, dy=dy: self.p.run_task(self.move_player, dx, dy),
-                    style=ft.ButtonStyle(shape=ft.CircleBorder()), tooltip="Move",
-                ),
-                shadow=ft.BoxShadow(blur_radius=8, spread_radius=0, color=ft.Colors.with_opacity(0.25, "#000000"))
-            )
-        up    = btn(ft.Icons.KEYBOARD_ARROW_UP,    0, -1, base_left + btn_size + gap, base_top)
-        leftb = btn(ft.Icons.KEYBOARD_ARROW_LEFT, -1,  0, base_left,                  base_top + btn_size + gap)
-        rightb= btn(ft.Icons.KEYBOARD_ARROW_RIGHT, 1,  0, base_left + 2*btn_size + 2*gap, base_top + btn_size + gap)
-        down  = btn(ft.Icons.KEYBOARD_ARROW_DOWN,  0,  1, base_left + btn_size + gap, base_top + 2*btn_size + 2*gap)
-        cross = ft.Container(left=base_left, top=base_top, width=btn_size*3 + gap*2, height=btn_size*3 + gap*2,
-                             bgcolor=ft.Colors.with_opacity(0.05, "#ffffff"), border_radius=16)
-        return ft.Stack(controls=[cross, up, leftb, rightb, down])
-
     # --- rysowanie aut ---
     def _car_shapes(self, c: Car):
         L, Ht, x, y = c.length, GRID, c.x, c.y
@@ -263,10 +391,9 @@ class GonzoGame:
         roof_left, roof_top = x + (L - roof_w)/2, y + (Ht - roof_h)/2
         shapes.append(RRECT(roof_left, roof_top, roof_w, roof_h, 6, paint=FILL(roof_col)))
         glass_color = "#111827"
-        ring_left, ring_top, ring_w, ring_h = roof_left, roof_top, roof_w, roof_h
         ring_stroke = max(6, int(Ht * 0.18))
-        shapes.append(RRECT(ring_left, ring_top, ring_w, ring_h, min(12, Ht//2), paint=STROKE(glass_color, ring_stroke)))
-        light_len, light_th = min(18, max(10, int(L * 0.08))), 4
+        shapes.append(RRECT(roof_left, roof_top, roof_w, roof_h, min(12, Ht//2), paint=STROKE(glass_color, ring_stroke)))
+        light_len, light_th = min(int(GRID * 0.45), max(10, int(L * 0.08))), max(3, int(GRID * 0.10))
         off_y1, off_y2 = int(y + Ht * 0.28), int(y + Ht * 0.68)
         if dir_right:
             front_x, back_x = int(x + L - light_len - 2), int(x + 2)
@@ -290,7 +417,7 @@ class GonzoGame:
         ]
         for y in (LANES_Y[1], LANES_Y[2], LANES_Y[3]):
             for x in range(0, W, GRID):
-                shapes.append(cv.Rect(x, y-4, GRID//2, 2, paint=FILL("#f1f2f6")))
+                shapes.append(cv.Rect(x, y-4, GRID//2, max(2, GRID//20), paint=FILL("#f1f2f6")))
         for c in self.cars: shapes += self._car_shapes(c)
         for s in self.stains:
             r = s.t / s.max_t
@@ -320,8 +447,12 @@ class GonzoGame:
     def destroy_cars(self): self.cars.clear()
     def create_cars(self):
         self.cars.clear()
-        specs = [(LANES_Y[0], 3.0, 3, 2.0*GRID), (LANES_Y[1], 2.2, 3, 2.5*GRID),
-                 (LANES_Y[2], -2.6, 2, 1.5*GRID), (LANES_Y[3], -1.8, 4, 2.0*GRID)]
+        specs = [
+            (LANES_Y[0],  3.0, 3, 2.0*GRID),
+            (LANES_Y[1],  2.2, 3, 2.5*GRID),
+            (LANES_Y[2], -2.6, 2, 1.5*GRID),
+            (LANES_Y[3], -1.8, 4, 2.0*GRID),
+        ]
         colors = ["#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#f78c6b", "#9b5de5"]
         scale = self.speed_multiplier_for_level(self.level)
         for y, base, count, L in specs:
@@ -342,7 +473,7 @@ class GonzoGame:
         blink = (self.tick // 6) % 2 == 0
         self.hearts_row.controls = [
             ft.Text(("❤" if (i < self.lives and not (self.lives == 1 and i == 0 and not blink)) else "♡"),
-                    color=(HEART_RED if i < self.lives else HEART_WHITE), size=22)
+                    color=(HEART_RED if i < self.lives else HEART_WHITE), size=max(18, int(GRID*0.55)))
             for i in range(4)
         ]
         self.btn_restart_cp.visible = self.game_over
@@ -351,7 +482,6 @@ class GonzoGame:
 
     def show_level_banner(self):
         self.level_banner.value = f"LEVEL {self.level}"
-        self.level_banner.left, self.level_banner.top = W/2 - 80, GRID - 6
         self.level_banner.visible = True
         self.banner_ticks = 0
         self.level_banner.update()
@@ -359,6 +489,8 @@ class GonzoGame:
     # --- player & input ---
     def reset_player(self):
         self.player.left, self.player.top = START_X, START_Y
+        self.player.width = PLAYER_SIZE; self.player.height = PLAYER_SIZE
+        self.player_img.width = PLAYER_SIZE; self.player_img.height = PLAYER_SIZE
         self.player.data = {"alive": True}; self.player.update()
         self.player_img.src = self.SPRITES["START"]; self.player_img.update()
         self.current_dir = "front"; self.move_anim_until = 0
@@ -367,31 +499,25 @@ class GonzoGame:
     async def move_player(self, dx, dy):
         if not self.player.data.get("alive", True): return
         old_left, old_top = self.player.left, self.player.top
-        self.player.left = max(0, min(W - PLAYER_SIZE, self.player.left + dx * GRID))
-        self.player.top  = max(0, min(H - PLAYER_SIZE, self.player.top + dy * GRID))
+        self.player.left = max(0, min(W - PLAYER_SIZE, (self.player.left or 0) + dx * GRID))
+        self.player.top  = max(0, min(H - PLAYER_SIZE, (self.player.top  or 0) + dy * GRID))
         self.player.update()
         moved = (self.player.left != old_left or self.player.top != old_top)
         if moved:
-            # dźwięk kroku
             self._play_sfx("step")
-            # kierunek
             if dx > 0: self.current_dir = "right"
             elif dx < 0: self.current_dir = "left"
-            elif dy < 0: self.current_dir = "front"    # do góry ekranu
-            elif dy > 0: self.current_dir = "back"     # w dół ekranu
-            # animacja po ruchu (na kilka klatek)
-            self.move_anim_until = self.tick + 6     # ok. 0.3 s
+            elif dy < 0: self.current_dir = "front"
+            elif dy > 0: self.current_dir = "back"
+            self.move_anim_until = self.tick + 6
             self.last_move_tick = self.tick
 
     def _anim_update(self):
-        """Wywoływane co tick; zmienia self.player_img.src zgodnie z priorytetami."""
-        # 1) reakcja na klakson
         if self.tick < self.honk_until:
             if self.player_img.src != self.SPRITES["FUCK"]:
                 self.player_img.src = self.SPRITES["FUCK"]; self.player_img.update()
             return
 
-        # 2) bezczynność > 5s → random slideshow co 0.1 s
         idle_ticks = self.tick - self.last_move_tick
         if idle_ticks >= IDLE_RANDOM_AFTER:
             if (self.anim_tick_acc % ANIM_DT_TICKS) == 0:
@@ -400,35 +526,25 @@ class GonzoGame:
             self.anim_tick_acc += 1
             return
 
-        # 3) animacja ruchu (przez chwilę po wciśnięciu klawisza)
         if self.tick < self.move_anim_until:
             if (self.anim_tick_acc % ANIM_DT_TICKS) == 0:
                 if self.current_dir == "front":
-                    # cykl 3 klatek
                     self.player_img.src = self.SPRITES["STEP_FRONT"][self.step_front_idx]
-                    self.player_img.update()
-                    self.step_front_idx = (self.step_front_idx + 1) % 3
+                    self.player_img.update(); self.step_front_idx = (self.step_front_idx + 1) % 3
                 elif self.current_dir == "back":
-                    # naprzemiennie LOOK.BACK i STEP.BACK
                     self.player_img.src = self.SPRITES["STEP_BACK"] if self.back_toggle else self.SPRITES["LOOK_BACK"]
-                    self.player_img.update()
-                    self.back_toggle = not self.back_toggle
+                    self.player_img.update(); self.back_toggle = not self.back_toggle
                 elif self.current_dir == "left":
-                    # LOOK.LEFT + migawka z STEP_FRONT
                     seq = [self.SPRITES["LOOK_LEFT"]] + self.SPRITES["STEP_FRONT"]
                     self.player_img.src = seq[self.left_cycle_idx % len(seq)]
-                    self.player_img.update()
-                    self.left_cycle_idx += 1
+                    self.player_img.update(); self.left_cycle_idx += 1
                 elif self.current_dir == "right":
-                    # LOOK.RIGHT + migawka z STEP_FRONT
                     seq = [self.SPRITES["LOOK_RIGHT"]] + self.SPRITES["STEP_FRONT"]
                     self.player_img.src = seq[self.right_cycle_idx % len(seq)]
-                    self.player_img.update()
-                    self.right_cycle_idx += 1
+                    self.player_img.update(); self.right_cycle_idx += 1
             self.anim_tick_acc += 1
             return
 
-        # 4) domyślnie – stoi
         if self.player_img.src != self.SPRITES["START"]:
             self.player_img.src = self.SPRITES["START"]; self.player_img.update()
 
@@ -449,14 +565,14 @@ class GonzoGame:
         if not self.player.data.get("alive", True): return
         self._play_sfx("hit")
         self.player.data["alive"] = False; self.lives -= 1
-        self.stains.append(BloodStain(self.player.left + PLAYER_SIZE/2, self.player.top + PLAYER_SIZE/2))
+        self.stains.append(BloodStain((self.player.left or 0) + PLAYER_SIZE/2, (self.player.top or 0) + PLAYER_SIZE/2))
         self.death_msg.value = random.choice(["ECH TY CIULU","CO ZA JEŁOP","OMG TY NUBKU!!!","CO ZA BĘCWAŁ","KTO CIĘ UCZYŁ ŁAZIĆ","JAKI BARANEK","TY, GUZA SZUKASZ?"])
-        self.death_msg.left, self.death_msg.top, self.death_msg.visible = self.player.left - 10, self.player.top - 26, True
+        self.death_msg.left, self.death_msg.top, self.death_msg.visible = (self.player.left or 0) - 10, (self.player.top or 0) - 26, True
         self.death_msg.update()
         if self.lives <= 0 and not self.game_over:
             self.game_over = True
-            self.center_prompt.value, self.center_prompt.left = "GAME OVER — Space / Restart (checkpoint)", W/2 - 210
-            self.center_prompt.top, self.center_prompt.visible = H/2 - 70, True
+            self.center_prompt.value, self.center_prompt.left = "GAME OVER — Space / Restart (checkpoint)", max(8, W/2 - 210)
+            self.center_prompt.top, self.center_prompt.visible = H/2 - int(GRID*1.8), True
             self.center_prompt.update()
         self.update_hud()
 
@@ -464,7 +580,7 @@ class GonzoGame:
         self._play_sfx("level")
         prev = self.level; self.score += self.level * 100; self.level = min(MAX_LEVEL, self.level + 1)
         if prev % 10 == 0: self.checkpoint_level, self.checkpoint_score = self.level, self.score
-        self.center_prompt.value, self.center_prompt.left, self.center_prompt.top = f"LEVEL UP! → {self.level}", W/2 - 80, GRID
+        self.center_prompt.value, self.center_prompt.left, self.center_prompt.top = f"LEVEL UP! → {self.level}", max(8, W/2 - 80), GRID
         self.center_prompt.visible = True; self.center_prompt.update()
         self.show_level_banner()
         self.reset_player(); self.destroy_cars(); self.create_cars(); self.update_hud()
@@ -487,17 +603,19 @@ class GonzoGame:
                 pass
         if not ok:
             self.center_prompt.value = "Nie mogę zamknąć okna automatycznie. Zamknij kartę/okno przeglądarki."
-            self.center_prompt.left = W/2 - 260; self.center_prompt.top = GRID
-            self.center_prompt.visible = True; self.center_prompt.update()
+            self.center_prompt.left = max(8, W/2 - 260)
+            self.center_prompt.top = GRID
+            self.center_prompt.visible = True
+            self.center_prompt.update()
 
     # --- spacing enforcement ---
     def _enforce_spacing(self):
         lanes = defaultdict(list)
         for c in self.cars: lanes[(c.y, 1 if c.speed > 0 else -1)].append(c)
-        for (y, d), L in lanes.items():
-            L.sort(key=lambda c: c.x, reverse=(d < 0))
-            for i in range(1, len(L)):
-                a, b = L[i-1], L[i]
+        for (y, d), Ls in lanes.items():
+            Ls.sort(key=lambda c: c.x, reverse=(d < 0))
+            for i in range(1, len(Ls)):
+                a, b = Ls[i-1], Ls[i]
                 if d > 0:
                     need = a.x + a.length + MIN_GAP
                     if b.x < need: b.x = need
@@ -511,7 +629,6 @@ class GonzoGame:
         while True:
             self.tick += 1
 
-            # plamy
             for s in self.stains: s.step()
             self.stains = [s for s in self.stains if s.alive()]
             if self.death_msg.visible and self.tick % 40 == 0:
@@ -524,34 +641,31 @@ class GonzoGame:
                     self.level_banner.visible = False; self.level_banner.update()
 
             if not self.game_over:
-                # ruch aut + kolizje + klakson
                 for car in self.cars:
                     car.x += car.speed
                     if car.speed > 0 and car.x > W: car.x = -car.length - random.randint(50, 200)
+                    if car.speed < 0 and car.x + self.cars[0].length < 0:  # safeguard if list non-empty
+                        pass
                     if car.speed < 0 and car.x + car.length < 0: car.x = W + random.randint(50, 200)
 
-                    if car.honk_timer > 0:
-                        car.honk_timer -= 1
-                    if self.player.data.get("alive", True) and car.honk_timer == 0 and car.is_near(self.player.left, self.player.top):
+                    if car.honk_timer > 0: car.honk_timer -= 1
+                    if self.player.data.get("alive", True) and car.honk_timer == 0 and car.is_near(self.player.left or 0, self.player.top or 0):
                         self._play_sfx("honk")
                         car.honk_timer = 18
-                        # animacja FUCK.OFF przez 2 sekundy
                         self.honk_until = self.tick + HONK_REACT_TICKS
 
-                    if self.player.data.get("alive", True) and car.collides(self.player.left, self.player.top):
+                    if self.player.data.get("alive", True) and car.collides(self.player.left or 0, self.player.top or 0):
                         self.player_die()
 
                 self._enforce_spacing()
 
                 if not self.player.data.get("alive", True) and self.tick % 30 == 0 and self.lives > 0:
                     self.reset_player()
-                if self.player.data.get("alive", True) and self.player.top <= GRID * 3:
+                if self.player.data.get("alive", True) and (self.player.top or 0) <= GRID * 3:
                     self.level_complete(); level_up_cooldown = 0
 
-            # animacja sprita co tick (0.1s step)
             self._anim_update()
 
-            # 1 odświeżenie canvas
             self.redraw_canvas()
             self.update_hud()
             level_up_cooldown += 1
