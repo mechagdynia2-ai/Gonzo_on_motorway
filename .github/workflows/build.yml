@@ -170,7 +170,7 @@ jobs:
         if-no-files-found: warn
         overwrite: false
 
-  build-apk:
+    build-apk:
     runs-on: ubuntu-latest
 
     steps:
@@ -182,29 +182,39 @@ jobs:
       with:
         python-version: ${{ env.PYTHON_VERSION }}
 
-    - name: Install Python Dependencies
+    - name: Install Python Dependencies + Flet CLI
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install flet-cli
 
     - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
       uses: subosito/flutter-action@v2
       with:
         flutter-version: ${{ env.FLUTTER_VERSION }}
 
-    - name: Setup Java JDK
-      uses: actions/setup-java@v4.2.1
+    # (Opcjonalnie) bardziej kompatybilne JDK 17
+    - name: Setup Java JDK 17
+      uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
-        java-version: '21'
+        java-version: '17'
+
+    - name: Flutter Doctor & Accept Licenses
+      run: |
+        flutter config --no-analytics
+        flutter doctor -v
+        yes | flutter doctor --android-licenses
+
+    - name: Get pub dependencies
+      run: flutter pub get
 
     - name: Flet Build APK
       run: |
-        flutter config --no-analytics
         flet build apk --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION
 
     - name: Upload APK Artifact
-      uses: actions/upload-artifact@v4.3.4
+      uses: actions/upload-artifact@v4
       with:
         name: apk-build-artifact
         path: build/apk
