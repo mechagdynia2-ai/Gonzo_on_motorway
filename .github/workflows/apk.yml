@@ -48,8 +48,7 @@ jobs:
           yes | flutter doctor --android-licenses || true
           flutter doctor -v
 
-      - name: Get pub dependencies
-        run: flutter pub get
+      # UWAGA: NIE uruchamiamy "flutter pub get" w repo Flet!
 
       - name: Build APK (Flet)
         run: |
@@ -58,7 +57,7 @@ jobs:
       - name: Show outputs (debug)
         run: |
           sudo apt-get update -y && sudo apt-get install -y tree
-          tree -L 5 build || true
+          tree -L 6 build || true
           ls -la build/apk || true
           ls -la build/app/outputs/flutter-apk || true
 
