@@ -8,7 +8,6 @@ on:
   workflow_dispatch:
 
 env:
-  # https://flet.dev/docs/publish#versioning
   BUILD_NUMBER: 1
   BUILD_VERSION: 1.0.0
   PYTHON_VERSION: 3.12.2
@@ -17,7 +16,6 @@ env:
 jobs:
   build-web:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -65,7 +63,7 @@ PY
           if-no-files-found: error
           overwrite: false
 
-      # (Opcjonalnie) Jeżeli chcesz od razu wystawić na GitHub Pages, odkomentuj poniższe dwa kroki:
+      # (Opcjonalnie) automatyczny Pages deploy:
       # - name: Upload Pages Artifact
       #   uses: actions/upload-pages-artifact@v3
       #   with:
@@ -73,7 +71,6 @@ PY
 
   build-apk:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
