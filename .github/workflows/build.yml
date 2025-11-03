@@ -170,59 +170,61 @@ jobs:
         if-no-files-found: warn
         overwrite: false
 
-      build-apk:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+build-apk:
+  runs-on: ubuntu-latest
 
-      - name: Setup Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Install Python Dependencies (+ CLI)
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # (opcjonalnie) upewnij się, że masz najnowsze flet/flet-cli:
-          # pip install --upgrade flet flet-cli
+    - name: Setup Python ${{ env.PYTHON_VERSION }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
+    - name: Install Python Dependencies (+ force Flet upgrade)
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install --upgrade flet flet-cli
+        python -c "import flet; print('FLET VERSION:', flet.__version__)"
 
-      - name: Print Flutter version  # kontrolny krok
-        run:
-          flutter --version
+    - name: Setup Flutter ${{ env.FLUTTER_VERSION }}
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: ${{ env.FLUTTER_VERSION }}
 
-      - name: Setup Java JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+    - name: Print Flutter version
+      run: flutter --version
 
-      - name: Accept Android licenses
-        run:
-          yes | flutter doctor --android-licenses
+    - name: Setup Java JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
 
-      - name: Get pub dependencies
-        run:
-          flutter pub get
+    - name: Flutter Doctor & Accept Licenses
+      run: |
+        flutter config --no-analytics
+        flutter doctor -v
+        yes | flutter doctor --android-licenses
 
-      - name: Flet Build APK
-        run:
-          flet build apk --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION
+    - name: Get pub dependencies
+      run: flutter pub get
 
+    - name: Flet Build APK
+      run: |
+        flet build apk --verbose --build-number=$BUILD_NUMBER --build-version=$BUILD_VERSION
+        ls -la build/apk || true
 
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-build-artifact
-          path: build/apk
-          if-no-files-found: warn
-          overwrite: false
+    - name: Upload APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: apk-build-artifact
+        path: build/apk
+        if-no-files-found: warn
+        overwrite: false
+
 
   build-ipa:
     runs-on: macos-latest
