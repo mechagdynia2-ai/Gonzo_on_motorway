@@ -201,7 +201,8 @@ class GonzoGame:
         async def _async_play(audio_control: AudioCtrl):
             """Robustly seeks to 0 and plays audio, as a separate task."""
             try:
-                await audio_control.seek(0)
+                # await audio_control.seek(0) # 'await' might be problematic
+                audio_control.seek(0)
                 audio_control.play()
             except Exception as e:
                 print(f"Error in _async_play: {e}")
@@ -346,11 +347,14 @@ class GonzoGame:
             ]
         )
 
-        # SCALING FIX: Reverted: self.root now just expands to fill space
+        # SCALING FIX: self.root must center the game world
         self.root = ft.Column(
             [self.world],
             spacing=0,
-            expand=True
+            expand=True,
+            # Add centering alignment
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER
         )
         self.p.add(self.root)
         self.p.update()
@@ -381,7 +385,7 @@ class GonzoGame:
             win_w = self.p.width or 800
             win_h = self.p.height or 600
 
-        appbar_h = 56
+        appbar_h = 56  # Approximate appbar height
         avail_w = int(win_w)
         avail_h = max(240, int(win_h - appbar_h))
 
@@ -399,7 +403,7 @@ class GonzoGame:
         MIN_GAP = int(GRID * 1.5)
 
         # START_X is centered in the *new* (potentially wide) W
-        START_X = (W // (GRID * 2)) * GRID
+        START_X = (W // (GRID * 2)) * GRID  # Find center-ish grid line
         START_Y = GRID * 13  # 13 grids from top (2 from bottom)
         LANES_Y = [GRID * 4, GRID * 6, GRID * 8, GRID * 10]
 
@@ -599,7 +603,7 @@ class GonzoGame:
         # Lane markings
         for y in (LANES_Y[1], LANES_Y[2], LANES_Y[3]):
             # Ensure W and GRID are integers for range()
-            for x in range(0, W, GRID):
+            for x in range(0, int(W), int(GRID)):
                 shapes.append(cv.Rect(x, y - 4, GRID // 2, max(2, GRID // 20), paint=FILL("#f1f2f6")))
         # Cars
         for c in self.cars: shapes += self._car_shapes(c)
@@ -823,7 +827,7 @@ class GonzoGame:
         if prev % 10 == 0: self.checkpoint_level, self.checkpoint_score = self.level, self.score
 
         self.center_prompt.value = f"LEVEL UP! → {self.level}"
-        self.center_prompt_cont.visible = True
+        self.center_prompt_cont.visible = True;
         self.center_prompt_cont.update()
 
         self.show_level_banner()
@@ -834,24 +838,20 @@ class GonzoGame:
 
     def restart_from_checkpoint(self):
         self.level, self.score, self.lives, self.game_over = self.checkpoint_level, self.checkpoint_score, 4, False
-        self.death_msg_cont.visible = False
-        self.center_prompt_cont.visible = False
-        self.death_msg_cont.update()
-        self.center_prompt_cont.update()
-
+        self.death_msg_cont.visible = self.center_prompt_cont.visible = False
         self.destroy_cars();
         self.stains.clear()
-        self.reset_player();
-        self.create_cars();
-        self.update_hud()
-        self.show_level_banner()
 
-        # AUDIO FIX: Force BGM to restart
+        # AUDIO FIX: Restart BGM
         try:
             self.bgm.play()
         except Exception as e:
             print(f"Error restarting BGM: {e}")
 
+        self.reset_player();
+        self.create_cars();
+        self.update_hud()
+        self.show_level_banner()
         self.redraw_canvas()
 
     def exit_game(self):
@@ -865,9 +865,8 @@ class GonzoGame:
             except Exception:
                 pass
         if not ok:
-            # This is expected behavior on mobile
-            self.center_prompt.value = "Cannot close window automatically. Please close the app using system navigation."
-            self.center_prompt_cont.top = GRID
+            # Show a message if window can't be closed (e.g., in web or mobile)
+            self.center_prompt.value = "Cannot close window. Please close the tab/app manually."
             self.center_prompt_cont.visible = True
             self.center_prompt_cont.update()
 
@@ -892,6 +891,7 @@ class GonzoGame:
         while True:
             self.tick += 1
 
+            # Update stains and fade out messages
             for s in self.stains: s.step()
             self.stains = [s for s in self.stains if s.alive()]
 
@@ -902,6 +902,7 @@ class GonzoGame:
             if self.center_prompt_cont.visible and level_up_cooldown > 20:
                 self.center_prompt_cont.visible = False;
                 self.center_prompt_cont.update()
+
             if self.level_banner_cont.visible:
                 self.banner_ticks += 1
                 if self.banner_ticks > 60:
@@ -911,9 +912,11 @@ class GonzoGame:
             if not self.game_over:
                 for car in self.cars:
                     car.x += car.speed
+                    # Car wrapping logic
                     if car.speed > 0 and car.x > W: car.x = -car.length - random.randint(50, 200)
                     if car.speed < 0 and car.x + car.length < 0: car.x = W + random.randint(50, 200)
 
+                    # Honking logic
                     if car.honk_timer > 0: car.honk_timer -= 1
                     if self.player.data.get("alive", True) and car.honk_timer == 0 and car.is_near(
                             self.player.left or 0, self.player.top or 0):
@@ -922,14 +925,17 @@ class GonzoGame:
                         car.honk_timer = 18
                         self.honk_until = self.tick + HONK_REACT_TICKS
 
+                    # Collision logic
                     if self.player.data.get("alive", True) and car.collides(self.player.left or 0,
                                                                             self.player.top or 0):
                         self.player_die()
 
                 self._enforce_spacing()
 
+                # Respawn logic
                 if not self.player.data.get("alive", True) and self.tick % 30 == 0 and self.lives > 0:
                     self.reset_player()
+                # Level up logic
                 if self.player.data.get("alive", True) and (self.player.top or 0) <= GRID * 3:
                     self.level_complete();
                     level_up_cooldown = 0
@@ -951,6 +957,4 @@ async def main(page: ft.Page):
 
 if __name__ == "__main__":
     ft.app(target=main, assets_dir="assets")
-
-
 
