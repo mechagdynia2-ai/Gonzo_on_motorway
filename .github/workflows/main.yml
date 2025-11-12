@@ -48,8 +48,9 @@ jobs:
     - name: Flet Build Web
       run: |
           echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}, USER: ${GITHUB_REPOSITORY%/*}, PROJECT_BASE_URL: ${GITHUB_REPOSITORY#*/}"
-          # POPRAWKA: Dodano flagę --assets assets
-          flet build web --assets assets --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
+          # POPRAWKA: Usunięto błędną flagę '--assets assets'.
+          # Flet 0.28.3 powinien automatycznie wykryć folder 'assets'.
+          flet build web --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
 
     - name: Upload Artifact
       uses: actions/upload-pages-artifact@v3
