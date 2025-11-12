@@ -45,8 +45,8 @@ jobs:
     - name: Flet Build Web
       run: |
           # Usunąłem 'flutter config'
-          # DODAŁEM KRYTYCZNĄ FLAGĘ --assets assets
-          flet build web --assets assets --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
+          # POPRAWKA: Usunąłem flagę --assets assets, która powodowała błąd.
+          flet build web --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
 
     - name: Upload Artifact
       uses: actions/upload-pages-artifact@v3
