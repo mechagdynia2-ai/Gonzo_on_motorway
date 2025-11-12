@@ -16,17 +16,24 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
     """
     Wczytuje plik .txt z folderu ASSETS_DIR i parsuje go do formatu listy pytań.
     
-    POPRAWKA: Zawsze używa page.open_asset(), ponieważ 'assets_dir' jest 
-    zdefiniowany globalnie w ft.app()
+    Logika if/else jest kluczowa:
+    - page.web/platform: Użyj page.open_asset (dla web/apk)
+    - else: Użyj standardowego open (dla lokalnego PyCharm)
     """
     parsed_questions = []
     filepath = os.path.join(ASSETS_DIR, filename)
+    content = "" # Zmienna na zawartość pliku
 
     try:
-        # POPRAWKA: Usunęliśmy logikę 'if page.web:'. 
-        # page.open_asset() działa teraz wszędzie.
-        with page.open_asset(filepath, "r", encoding="utf-8") as f:
-            content = f.read()
+        # Sprawdzamy, gdzie działa aplikacja
+        if page.web or page.platform in ("android", "ios"):
+            # Dla Web/Mobile, używamy page.open_asset()
+            with page.open_asset(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            # Dla lokalnego (PyCharm), używamy standardowego open()
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
 
     except Exception as e:
         # Nie udało się otworzyć pliku (np. nie istnieje)
@@ -106,6 +113,24 @@ def normalize_answer(text: str) -> str:
 
     return text
 
+# Funkcja pomocnicza do sprawdzania plików
+def check_file_exists(page: ft.Page, filename: str) -> bool:
+    """
+    Sprawdza, czy plik istnieje, używając metody odpowiedniej dla platformy.
+    """
+    filepath = os.path.join(ASSETS_DIR, filename)
+    try:
+        if page.web or page.platform in ("android", "ios"):
+            # Próba otwarcia pliku w trybie 'r' to najlepszy test
+            with page.open_asset(filepath, "r", encoding="utf-8") as f:
+                pass # Po prostu sprawdzamy, czy się otworzy
+        else:
+            # Używamy standardowego os.path.exists dla lokalnego
+            if not os.path.exists(filepath):
+                return False
+        return True
+    except Exception:
+        return False
 
 def main(page: ft.Page):
     page.title = "Awantura o Kasę - Singleplayer"
@@ -113,7 +138,7 @@ def main(page: ft.Page):
     page.window_width = 600
     page.window_height = 800
     page.theme_mode = ft.ThemeMode.LIGHT
-    page.scroll = ft.ScrollMode.AUTO  # Dodana opcja przewijania
+    page.scroll = ft.ScrollMode.AUTO
 
     # --- Zmienne stanu gry ---
     game_state = {
@@ -333,7 +358,6 @@ def main(page: ft.Page):
 
     # --- WIDOK 2: EKRAN GŁÓWNY (MENU) ---
     
-    # POPRAWKA: Nowy element do wyświetlania błędów w menu
     main_menu_feedback = ft.Text(
         value="", 
         color="red", 
@@ -341,65 +365,34 @@ def main(page: ft.Page):
         text_align=ft.TextAlign.CENTER
     )
 
-    menu_tiles_standard = []
-    for i in range(1, 31):
-        filename = f"{i:02d}.txt"
+    # Funkcja do tworzenia kafelków, aby uniknąć powtarzania kodu
+    def create_menu_tile(index, bgcolor):
+        filename = f"{index:02d}.txt"
         
-        # POPRAWKA: Usunęliśmy 'check_file_exists'
-        menu_tiles_standard.append(
-            ft.Button(
-                content=ft.Text(value=f"{i:02d}", size=12),
-                tooltip=f"Zestaw {i:02d}",
-                width=35,
-                height=35,
-                on_click=lambda e, f=filename: start_game_session(e, f),
-                disabled=False, # Zawsze aktywne
-                style=ft.ButtonStyle(
-                    bgcolor="blue_grey_50" 
-                )
+        # POPRAWKA: Używamy nowej, uniwersalnej funkcji sprawdzającej
+        file_exists = check_file_exists(page, filename)
+        
+        return ft.Button(
+            content=ft.Text(value=f"{index:02d}", size=12),
+            tooltip=f"Zestaw {index:02d}",
+            width=35,
+            height=35,
+            on_click=lambda e, f=filename: start_game_session(e, f),
+            disabled=not file_exists, # Wyłączamy, jeśli plik nie istnieje
+            style=ft.ButtonStyle(
+                bgcolor=bgcolor if file_exists else "grey_300"
             )
         )
 
-    menu_tiles_popkultura = []
-    for i in range(31, 41):
-        filename = f"{i:02d}.txt"
+    menu_tiles_standard = [create_menu_tile(i, "blue_grey_50") for i in range(1, 31)]
+    menu_tiles_popkultura = [create_menu_tile(i, "deep_purple_50") for i in range(31, 41)]
+    menu_tiles_popkultura_muzyka = [create_menu_tile(i, "amber_50") for i in range(41, 51)]
 
-        menu_tiles_popkultura.append(
-            ft.Button(
-                content=ft.Text(value=f"{i:02d}", size=12),
-                tooltip=f"Zestaw {i:02d}",
-                width=35,
-                height=35,
-                on_click=lambda e, f=filename: start_game_session(e, f),
-                disabled=False, # Zawsze aktywne
-                style=ft.ButtonStyle(
-                    bgcolor="deep_purple_50" 
-                )
-            )
-        )
-
-    menu_tiles_popkultura_muzyka = []
-    for i in range(41, 51):
-        filename = f"{i:02d}.txt"
-
-        menu_tiles_popkultura_muzyka.append(
-            ft.Button(
-                content=ft.Text(value=f"{i:02d}", size=12),
-                tooltip=f"Zestaw {i:02d}",
-                width=35,
-                height=35,
-                on_click=lambda e, f=filename: start_game_session(e, f),
-                disabled=False, # Zawsze aktywne
-                style=ft.ButtonStyle(
-                    bgcolor="amber_50"
-                )
-            )
-        )
 
     main_menu_view = ft.Column(
         [
             ft.Text("Wybierz zestaw pytań:", size=24, weight=ft.FontWeight.BOLD),
-            ft.Text(f"Pliki pytań muszą znajdować się w folderze '{ASSETS_DIR}'."),
+            ft.Text(f"Dostępne są tylko podświetlone zestawy (pliki .txt w folderze '{ASSETS_DIR}')."),
             main_menu_feedback, # Dodany element na błędy
             ft.Divider(height=20),
             ft.Row(menu_tiles_standard[0:10], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
@@ -922,5 +915,5 @@ def main(page: ft.Page):
 
 # Uruchomienie aplikacji Flet
 if __name__ == "__main__":
-    # POPRAWKA: Dodajemy 'assets_dir' - to jest klucz do sukcesu!
+    # KLUCZOWE: 'assets_dir' mówi Fletowi, aby spakował ten folder.
     ft.app(target=main, assets_dir=ASSETS_DIR)
