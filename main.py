@@ -17,10 +17,10 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
     Wczytuje plik .txt z folderu ASSETS_DIR i parsuje go do formatu listy pytań.
 
     Logika if/else jest kluczowa:
-    - page.web/platform: Użyj page.open_asset (dla web/apk)
-    - else: Użyj standardowego open (dla lokalnego PyCharm)
+    - page.platform (android/ios): Użyj page.open_asset (dla apk)
+    - else (web/desktop): Użyj standardowego open
     
-    TA FUNKCJA JEST POPRAWNA, NIE ZMIENIAMY JEJ.
+    TA FUNKCJA JEST POPRAWIONA, ZMIENIONO LOGIKĘ IF/ELSE.
     """
     parsed_questions = []
     # Ścieżka 'assets/filename.txt' jest tworzona poprawnie
@@ -29,15 +29,22 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
 
     try:
         # Sprawdzamy, gdzie działa aplikacja
-        if page.web or page.platform in ("android", "ios"):
-            # Dla Web/Mobile, używamy page.open_asset()
-            # To jest "otwarcie" pliku na webie
+        
+        # --- KLUCZOWA ZMIANA TUTAJ ---
+        # Usunęliśmy 'page.web' z tego warunku.
+        # Błąd "'Page' object has no attribute 'open_asset'" dowiódł,
+        # że na webie ta metoda nie istnieje.
+        if page.platform in ("android", "ios"):
+            # Dla Mobile (APK), używamy page.open_asset()
             with page.open_asset(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
         else:
-            # Dla lokalnego (PyCharm), używamy standardowego open()
+            # Dla lokalnego (PyCharm) ORAZ dla Web
+            # Liczymy, że Pyodide na webie poprawnie obsłuży 'open()'
+            # dla plików, które są obok (dzięki 'assets_dir' w buildzie)
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
+        # --- KONIEC ZMIANY ---
 
     except Exception as e:
         # Jak prosiłeś: jeśli plik nie istnieje (lub jest błąd), aplikacja
@@ -120,11 +127,6 @@ def normalize_answer(text: str) -> str:
     text = "".join(text.split())
 
     return text
-
-
-# --- USUNIĘTA FUNKCJA ---
-# def check_file_exists(page: ft.Page, filename: str) -> bool:
-#     ... (usunięto)
 
 
 def main(page: ft.Page):
@@ -364,8 +366,8 @@ def main(page: ft.Page):
     def create_menu_tile(index, bgcolor):
         filename = f"{index:02d}.txt"
 
-        # --- GŁÓWNA ZMIANA TUTAJ ---
-        # Usunięto sprawdzanie pliku.
+        # --- GŁÓWNA ZMIANA (z poprzedniej iteracji) ---
+        # Usunięto sprawdzanie pliku (check_file_exists).
         # Zakładamy, że pliki 01-50 istnieją.
         
         return ft.Button(
