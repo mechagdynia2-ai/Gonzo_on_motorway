@@ -25,15 +25,18 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
     # ZMIANA: Sprawdzamy środowisko (web czy local)
     try:
         if page.web:
-            # Środowisko WEB (GitHub Pages)
+            # Środowisko WEB (GitHub Pages / APK)
             asset_path = f"{ASSETS_DIR}/{filename}"
+            # W web/apk musimy użyć page.open_asset
             with page.open_asset(asset_path, encoding="utf-8") as f:
                 content = f.read()
         else:
-            # Środowisko LOKALNE (Desktop)
+            # Środowisko LOKALNE (Desktop, python gra.py)
             filepath = os.path.join(ASSETS_DIR, filename)
+            # Lokalnie używamy standardowego open()
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
+
     except FileNotFoundError:
         return []
     except Exception as e:
@@ -338,13 +341,16 @@ def main(page: ft.Page):
 
     # ZMIANA: Definiujemy funkcję pomocniczą do sprawdzania plików
     def check_file_exists(filename: str) -> bool:
+        # ZMIANA: Logika "jeśli-to"
         if page.web:
-            # Środowisko WEB
+            # Środowisko WEB (GitHub Pages / APK)
             asset_path = f"{ASSETS_DIR}/{filename}"
+            # W web/apk musimy użyć page.asset_exists
             return page.asset_exists(asset_path)
         else:
-            # Środowisko LOKALNE
+            # Środowisko LOKALNE (Desktop, python gra.py)
             filepath = os.path.join(ASSETS_DIR, filename)
+            # Lokalnie używamy standardowego os.path.exists
             return os.path.exists(filepath)
 
     menu_tiles_standard = []
@@ -917,7 +923,6 @@ def main(page: ft.Page):
 
 # Uruchomienie aplikacji Flet
 if __name__ == "__main__":
-    # ZMIANA: Musimy przekazać funkcję 'main' do ft.app
-    # a Flet automatycznie przekaże do niej 'page'
     # 'assets_dir' jest ważne dla lokalnego developmentu
+    # i jest ignorowane podczas 'flet build' (co jest dobre)
     ft.app(target=main, assets_dir=ASSETS_DIR)
