@@ -51,10 +51,10 @@ jobs:
       run: |
           echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}, USER: ${GITHUB_REPOSITORY%/*}, PROJECT_BASE_URL: ${GITHUB_REPOSITORY#*/}"
           
-          # POPRAWKA: Usunęliśmy błędną flagę '--assets-dir assets'.
-          # Flet sam odczyta 'assets_dir' z pliku gra.py
-          # POPRAWKA 2: Dodajemy --clear-cache (zgodnie z Twoją sugestią)
-          flet build web --clear-cache --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
+          # OSTATECZNA POPRAWKA:
+          # Mówimy Fletowi, żeby zbudował 'gra.py' (a nie domyślne 'main.py')
+          # Dzięki temu Flet odczyta 'assets_dir=ASSETS_DIR' z dołu pliku gra.py
+          flet build web gra.py --clear-cache --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
 
     - name: Upload Artifact
       uses: actions/upload-pages-artifact@v3
