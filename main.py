@@ -15,27 +15,28 @@ ASSETS_DIR = "assets"
 def parse_question_file(page: ft.Page, filename: str) -> list:
     """
     Wczytuje plik .txt z folderu ASSETS_DIR i parsuje go do formatu listy pytań.
-    Używa page.open_asset() (dla web/apk) lub open() (dla local).
-    Zwraca listę słowników [ { "question": ..., "correct": ..., "answers": [...] }, ... ]
+
+    Logika if/else jest kluczowa:
+    - page.web/platform: Użyj page.open_asset (dla web/apk)
+    - else: Użyj standardowego open (dla lokalnego PyCharm)
     """
     parsed_questions = []
-    content = ""
+    filepath = os.path.join(ASSETS_DIR, filename)
+    content = ""  # Zmienna na zawartość pliku
 
     try:
-        # Ta logika "if/else" jest kluczowa dla kompatybilności web/local
-        if page.web:
-            # Środowisko WEB (GitHub Pages / APK)
-            asset_path = f"{ASSETS_DIR}/{filename}"
-            with page.open_asset(asset_path, encoding="utf-8") as f:
+        # Sprawdzamy, gdzie działa aplikacja
+        if page.web or page.platform in ("android", "ios"):
+            # Dla Web/Mobile, używamy page.open_asset()
+            with page.open_asset(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
         else:
-            # Środowisko LOKALNE (Desktop, python gra.py)
-            filepath = os.path.join(ASSETS_DIR, filename)
+            # Dla lokalnego (PyCharm), używamy standardowego open()
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
 
-    except Exception:
-        # Jeśli plik nie istnieje lub jest błąd, zwróć pustą listę
+    except Exception as e:
+        # Nie udało się otworzyć pliku (np. nie istnieje)
         return []
 
     # Dzielimy plik na bloki na podstawie numeru pytania (np. "01.", "02.", "10.")
@@ -47,30 +48,36 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
             continue
 
         # Stosujemy WZORZEC ELASTYCZNY do każdego pojedynczego bloku
+        # Używamy (?:...) aby grupy nieprzechwytujące nie psuły kolejności .group()
         match = re.match(
-            # Używamy (?:...) dla grup "non-capturing", aby nie psuć kolejności
             r"^\d+\.\s(.*?)\n"  # Grupa 1: Pytanie
-            r"prawid[lł]owa\s+odpowied(?:z|ź)\s*=\s*(.*?)\n"  # Grupa 2: Prawidłowa odpowiedź
+            # Elastyczna linia dla "prawidłowa odpowiedź = "
+            r"prawid(?:l|ł)owa\s+odpowied(?:z|ź)\s*=\s*(.*?)\n"  # Grupa 2: Prawidłowa odpowiedź
+            # Elastyczna linia dla "odpowiedz ABCD = "
             r"odpowied(?:z|ź)\s+abcd\s*=\s*A\s*=\s*(.*?), B\s*=\s*(.*?), C\s*=\s*(.*?), D\s*=\s*(.*?)$",
-            block, re.DOTALL | re.IGNORECASE
+            block, re.DOTALL | re.IGNORECASE  # Flagi: DOTALL (. działa na linie) i IGNORECASE (ignoruj wielk. liter)
         )
 
         if match:
             try:
+                # Grupa 1: Pytanie
                 question = match.group(1).strip()
+                # Grupa 2: Prawidłowa odpowiedź (Teraz poprawnie)
                 correct = match.group(2).strip()
+                # Grupy 3-6: Odpowiedzi ABCD (Teraz poprawnie)
                 answers = [
                     match.group(3).strip(),
                     match.group(4).strip(),
                     match.group(5).strip(),
                     match.group(6).strip(),
                 ]
+
                 parsed_questions.append({
                     "question": question,
                     "correct": correct,
                     "answers": answers
                 })
-            except Exception:
+            except Exception as e:
                 pass
         else:
             pass
@@ -81,21 +88,50 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
 def normalize_answer(text: str) -> str:
     """
     Normalizuje odpowiedź:
-    - usuwa wielkość liter, spacje na brzegach
+    - usuwa wielkość liter
+    - usuwa spacje na początku i końcu
     - zamienia polskie diakrytyki (ó->o, ł->l, ż/ź->z, itp.)
     - zamienia 'u' na 'o' (zgodnie z prośbą ó-u-o)
     - usuwa wszystkie wewnętrzne spacje (zgodnie z "mounteverest")
     """
     text = str(text).lower().strip()
+
+    # Słownik zamian diakrytyków
     diacritics = {
         'ó': 'o', 'ł': 'l', 'ż': 'z', 'ź': 'z', 'ć': 'c',
         'ń': 'n', 'ś': 's', 'ą': 'a', 'ę': 'e', 'ü': 'u'
     }
+
     for char, replacement in diacritics.items():
         text = text.replace(char, replacement)
+
+    # Zamiana 'u' na 'o' (jak w 'ó-u-o')
     text = text.replace('u', 'o')
+
+    # Usunięcie wszystkich spacji
     text = "".join(text.split())
+
     return text
+
+
+# Funkcja pomocnicza do sprawdzania plików
+def check_file_exists(page: ft.Page, filename: str) -> bool:
+    """
+    Sprawdza, czy plik istnieje, używając metody odpowiedniej dla platformy.
+    """
+    filepath = os.path.join(ASSETS_DIR, filename)
+    try:
+        if page.web or page.platform in ("android", "ios"):
+            # Próba otwarcia pliku w trybie 'r' to najlepszy test
+            with page.open_asset(filepath, "r", encoding="utf-8") as f:
+                pass  # Po prostu sprawdzamy, czy się otworzy
+        else:
+            # Używamy standardowego os.path.exists dla lokalnego
+            if not os.path.exists(filepath):
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def main(page: ft.Page):
@@ -110,16 +146,16 @@ def main(page: ft.Page):
     game_state = {
         "money": 10000,
         "current_question_index": -1,
-        "base_stake": 500,
+        "base_stake": 500,  # Kwota stawki za pytanie
         "abcd_unlocked": False,
-        "main_pot": 0,
-        "money_spent_on_hints": 0,
-        "current_bid_amount": 0,
-        "max_bid_per_round": 5000,
+        "main_pot": 0,  # Główna pula wygranej
+        "money_spent_on_hints": 0,  # Licznik wydatków
+        "current_bid_amount": 0,  # Ile zalicytowano w tej rundzie
+        "max_bid_per_round": 5000,  # Limit licytacji na rundę
         "current_bonus_pot": 0,
-        "active_question_set": [],
-        "total_questions": 0,
-        "set_name": ""
+        "active_question_set": [],  # Lista pytań załadowana z pliku
+        "total_questions": 0,  # Całkowita liczba pytań w zestawie
+        "set_name": ""  # Nazwa zestawu (np. "01")
     }
 
     # --- Kontrolki Flet (Elementy UI) ---
@@ -131,18 +167,21 @@ def main(page: ft.Page):
         weight=ft.FontWeight.BOLD,
         color="green_600"
     )
+
     txt_money_spent = ft.Text(
         value="Wydano: 0 zł",
-        size=16,
+        size=14,
         color="grey_700",
         text_align=ft.TextAlign.RIGHT
     )
+
     txt_question_counter = ft.Text(
         value="Pytanie 0 / 0 (Zestaw 00)",
         size=16,
         color="grey_700",
         text_align=ft.TextAlign.CENTER
     )
+
     txt_main_pot = ft.Text(
         value=f"AKTUALNA PULA: 0 zł",
         size=22,
@@ -150,6 +189,7 @@ def main(page: ft.Page):
         color="purple_600",
         text_align=ft.TextAlign.CENTER
     )
+
     txt_bonus_pot = ft.Text(
         value="Bonus od banku: 0 zł",
         size=16,
@@ -157,12 +197,14 @@ def main(page: ft.Page):
         text_align=ft.TextAlign.CENTER,
         visible=False
     )
+
     txt_question = ft.Text(
         value="Wciśnij 'Start', aby rozpocząć grę!",
         size=18,
         weight=ft.FontWeight.BOLD,
         text_align=ft.TextAlign.CENTER
     )
+
     txt_feedback = ft.Text(value="", size=16, text_align=ft.TextAlign.CENTER)
 
     # --- Kontrolki UI Odpowiedzi (grupowane) ---
@@ -172,26 +214,29 @@ def main(page: ft.Page):
         text_align=ft.TextAlign.CENTER,
         capitalization=ft.TextCapitalization.SENTENCES
     )
+
     btn_submit_answer = ft.Button(
         text="Zatwierdź odpowiedź",
         icon="check",
         on_click=None,
         width=400,
     )
+
     answers_container = ft.Column(
         controls=[],
         spacing=10,
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         visible=False
     )
+
     answer_ui_container = ft.Column(
         [
             txt_answer_field,
             btn_submit_answer,
-            answers_container,
+            answers_container,  # Kontener na przyciski ABCD
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        visible=False
+        visible=False  # Ukryty na starcie
     )
 
     # --- Kontrolki UI Licytacji (grupowane) ---
@@ -201,19 +246,21 @@ def main(page: ft.Page):
         on_click=None,
         width=400,
     )
+
     btn_start_answering = ft.Button(
-        text="Pokaż pytanie",
+        text="Pokaż pytanie",  # Zmieniony tekst
         icon="gavel",
         on_click=None,
         width=400,
     )
+
     bidding_container = ft.Column(
         [
             btn_bid_100,
             btn_start_answering,
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        visible=False
+        visible=False  # Ukryty na starcie
     )
 
     # --- Kontrolki Podpowiedzi i Nawigacji ---
@@ -224,6 +271,7 @@ def main(page: ft.Page):
         width=400,
         disabled=True
     )
+
     btn_buy_abcd = ft.Button(
         text="Kup opcje ABCD (losowo 1000-3000 zł)",
         icon="view_list",
@@ -231,18 +279,20 @@ def main(page: ft.Page):
         width=400,
         disabled=True
     )
+
     btn_next = ft.Button(
         text="Następne pytanie",
         on_click=None,
         visible=False,
         width=400
     )
+
     btn_back_to_menu = ft.Button(
         text="Wróć do menu",
         icon="arrow_back",
-        on_click=None,
+        on_click=None,  # Przypiszemy później
         width=400,
-        visible=False,
+        visible=False,  # Pokażemy po zakończeniu pytania
         color="red"
     )
 
@@ -261,145 +311,108 @@ def main(page: ft.Page):
                 padding=ft.padding.only(left=20, right=20, top=10, bottom=5)
             ),
             ft.Divider(height=1, color="grey_300"),
+
             ft.Container(
                 content=txt_question_counter,
                 alignment=ft.alignment.center,
                 padding=ft.padding.only(top=10)
             ),
+
             ft.Container(
                 content=txt_main_pot,
                 alignment=ft.alignment.center,
                 padding=ft.padding.only(top=10, bottom=5)
             ),
+
             ft.Container(
                 content=txt_bonus_pot,
                 alignment=ft.alignment.center,
                 padding=ft.padding.only(bottom=5)
             ),
+
             ft.Container(
                 content=txt_question,
                 alignment=ft.alignment.center,
                 padding=ft.padding.only(left=20, right=20, top=10, bottom=10),
                 height=100
             ),
+
             bidding_container,
             answer_ui_container,
+
             ft.Divider(height=20, color="transparent"),
+
+            # ZMIANA KOLEJNOŚCI TUTAJ
             ft.Column(
                 [
                     btn_hint_5050,
                     btn_buy_abcd,
                     btn_next,
-                    txt_feedback,
+                    txt_feedback,  # Przeniesiony tutaj
                     btn_back_to_menu,
                 ],
                 spacing=10,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER
             )
         ],
-        visible=False
+        visible=False  # Na starcie ukryty
     )
 
     # --- WIDOK 2: EKRAN GŁÓWNY (MENU) ---
 
-    # KRYTYCZNA POPRAWKA:
-    # Ta funkcja teraz działa dla web, apk i local
-    def check_file_exists(filename: str) -> bool:
-        """
-        Sprawdza, czy plik istnieje, używając metody uniwersalnej (try...except).
-        Działa lokalnie, web i mobile.
-        """
-        try:
-            # Używamy tej samej logiki co parser
-            if page.web:
-                asset_path = f"{ASSETS_DIR}/{filename}"
-                with page.open_asset(asset_path, encoding="utf-8") as f:
-                    pass  # Po prostu sprawdź, czy się otworzy
-            else:
-                filepath = os.path.join(ASSETS_DIR, filename)
-                with open(filepath, "r", encoding="utf-8") as f:
-                    pass  # Po prostu sprawdź, czy się otworzy
-            return True
-        except Exception:
-            return False
+    main_menu_feedback = ft.Text(
+        value="",
+        color="red",
+        visible=False,
+        text_align=ft.TextAlign.CENTER
+    )
 
-    menu_tiles_standard = []
-    for i in range(1, 31):
-        filename = f"{i:02d}.txt"
-        file_exists = check_file_exists(filename)  # Używamy nowej, poprawnej funkcji
+    # Funkcja do tworzenia kafelków, aby uniknąć powtarzania kodu
+    def create_menu_tile(index, bgcolor):
+        filename = f"{index:02d}.txt"
 
-        menu_tiles_standard.append(
-            ft.Button(
-                content=ft.Text(f"{i:02d}", size=12),
-                width=35,
-                height=35,
-                on_click=lambda e, f=filename: start_game_session(e, f),
-                disabled=not file_exists,
-                style=ft.ButtonStyle(
-                    bgcolor="blue_grey_50" if file_exists else "grey_300",
-                    padding=0
-                )
+        # POPRAWKA: Używamy nowej, uniwersalnej funkcji sprawdzającej
+        file_exists = check_file_exists(page, filename)
+
+        return ft.Button(
+            content=ft.Text(value=f"{index:02d}", size=12),
+            tooltip=f"Zestaw {index:02d}",
+            width=35,
+            height=35,
+            on_click=lambda e, f=filename: start_game_session(e, f),
+            disabled=not file_exists,  # Wyłączamy, jeśli plik nie istnieje
+            style=ft.ButtonStyle(
+                bgcolor=bgcolor if file_exists else "grey_300"
             )
         )
 
-    menu_tiles_popkultura = []
-    for i in range(31, 41):
-        filename = f"{i:02d}.txt"
-        file_exists = check_file_exists(filename)  # Używamy nowej, poprawnej funkcji
-
-        menu_tiles_popkultura.append(
-            ft.Button(
-                content=ft.Text(f"{i:02d}", size=12),
-                width=35,
-                height=35,
-                on_click=lambda e, f=filename: start_game_session(e, f),
-                disabled=not file_exists,
-                style=ft.ButtonStyle(
-                    bgcolor="deep_purple_50" if file_exists else "grey_300",
-                    padding=0
-                )
-            )
-        )
-
-    menu_tiles_popkultura_muzyka = []
-    for i in range(41, 51):
-        filename = f"{i:02d}.txt"
-        file_exists = check_file_exists(filename)  # Używamy nowej, poprawnej funkcji
-
-        menu_tiles_popkultura_muzyka.append(
-            ft.Button(
-                content=ft.Text(f"{i:02d}", size=12),
-                width=35,
-                height=35,
-                on_click=lambda e, f=filename: start_game_session(e, f),
-                disabled=not file_exists,
-                style=ft.ButtonStyle(
-                    bgcolor="pink_50" if file_exists else "grey_300",
-                    padding=0
-                )
-            )
-        )
+    menu_tiles_standard = [create_menu_tile(i, "blue_grey_50") for i in range(1, 31)]
+    menu_tiles_popkultura = [create_menu_tile(i, "deep_purple_50") for i in range(31, 41)]
+    menu_tiles_popkultura_muzyka = [create_menu_tile(i, "amber_50") for i in range(41, 51)]
 
     main_menu_view = ft.Column(
         [
             ft.Text("Wybierz zestaw pytań:", size=24, weight=ft.FontWeight.BOLD),
             ft.Text(f"Dostępne są tylko podświetlone zestawy (pliki .txt w folderze '{ASSETS_DIR}')."),
+            main_menu_feedback,  # Dodany element na błędy
             ft.Divider(height=20),
-            ft.Row(menu_tiles_standard[0:10], alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=5),
-            ft.Row(menu_tiles_standard[10:20], alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=5),
-            ft.Row(menu_tiles_standard[20:30], alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=5),
+            ft.Row(menu_tiles_standard[0:10], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
+            ft.Row(menu_tiles_standard[10:20], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
+            ft.Row(menu_tiles_standard[20:30], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
 
             ft.Divider(height=30),
-            ft.Text("Pytania popkultura Boost:", size=20, weight=ft.FontWeight.BOLD),
-            ft.Row(menu_tiles_popkultura, alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=5),
+            ft.Text("Pytania popkultura Boost:", size=24, weight=ft.FontWeight.BOLD),
+            ft.Divider(height=20),
+            ft.Row(menu_tiles_popkultura, alignment=ft.MainAxisAlignment.CENTER, wrap=True),
 
             ft.Divider(height=30),
-            ft.Text("Pytania popkultura i muzyka boost:", size=20, weight=ft.FontWeight.BOLD),
-            ft.Row(menu_tiles_popkultura_muzyka, alignment=ft.MainAxisAlignment.CENTER, wrap=True, spacing=5),
+            ft.Text("Pytania popkultura i muzyka boost:", size=24, weight=ft.FontWeight.BOLD),
+            ft.Divider(height=20),
+            ft.Row(menu_tiles_popkultura_muzyka, alignment=ft.MainAxisAlignment.CENTER, wrap=True),
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         spacing=10,
-        visible=True
+        visible=True  # Widoczny na starcie
     )
 
     # --- Funkcje Logiki Gry ---
@@ -432,6 +445,7 @@ def main(page: ft.Page):
             page.update(txt_bonus_pot)
 
     def update_question_counter():
+        """Aktualizuje licznik pytań (np. 01/50)."""
         idx = game_state["current_question_index"] + 1
         total = game_state["total_questions"]
         set_name = game_state["set_name"]
@@ -463,7 +477,7 @@ def main(page: ft.Page):
                 ft.TextButton("Wróć do menu", on_click=lambda e: go_to_main_menu(e))
             ],
             actions_alignment=ft.MainAxisAlignment.END,
-            on_dismiss=lambda e: go_to_main_menu(e)
+            on_dismiss=lambda e: go_to_main_menu(e)  # Domyślnie wróć do menu
         )
         page.dialog = dlg
         dlg.open = True
@@ -481,6 +495,8 @@ def main(page: ft.Page):
         btn_submit_answer.disabled = True
         btn_hint_5050.disabled = True
         btn_buy_abcd.disabled = True
+
+        # Nowa logika ukrywania przycisków
         toggle_answer_buttons(disabled=True)
 
         current_q = game_state["active_question_set"][game_state["current_question_index"]]
@@ -493,48 +509,47 @@ def main(page: ft.Page):
 
         similarity = fuzz.ratio(norm_user, norm_correct)
 
-        is_correct = (similarity >= 80)
-
-        if not game_state["abcd_unlocked"]:
-            if is_correct:
-                txt_feedback.value = f"DOBRZE! (Podob. {similarity}%) Wygrywasz {pot_won} zł!\nPoprawna odp: {correct_text}"
-                txt_feedback.color = "green"
-            else:
-                txt_feedback.value = f"ŹLE... (Podob. {similarity}%) Pula {pot_won} zł przechodzi dalej.\nPoprawna odp: {correct_text}"
-                txt_feedback.color = "red"
-
-        else:
-            clicked_button = None
-            correct_button = None
-
-            for btn in answers_container.controls:
-                if btn.data == correct_text:
-                    correct_button = btn
-                if btn.data == user_input:
-                    clicked_button = btn
-
-            if is_correct:
-                txt_feedback.value = f"DOBRZE! Wygrywasz {pot_won} zł!"
-                txt_feedback.color = "green"
-                if clicked_button:
-                    clicked_button.style = ft.ButtonStyle(bgcolor="green_200", color="black")
-            else:
-                txt_feedback.value = f"ŹLE... Pula {pot_won} zł przechodzi dalej."
-                txt_feedback.color = "red"
-                if clicked_button:
-                    clicked_button.style = ft.ButtonStyle(bgcolor="red_200", color="black")
-                if correct_button:
-                    correct_button.style = ft.ButtonStyle(bgcolor="green_200", color="black")
-
-            for btn in answers_container.controls:
-                if btn != clicked_button and btn != correct_button:
-                    btn.visible = False
+        is_correct = similarity >= 80
 
         if is_correct:
             game_state["money"] += pot_won
-            game_state["main_pot"] = 0
+            game_state["main_pot"] = 0  # Resetuj pulę
+            txt_feedback.value = f"DOBRZE! (Podob. {similarity}%) Wygrywasz {pot_won} zł!\nPoprawna odp: {correct_text}"
+            txt_feedback.color = "green"
         else:
-            game_state["main_pot"] = pot_won
+            game_state["main_pot"] = pot_won  # Pula zostaje
+            txt_feedback.value = f"ŹLE... (Podob. {similarity}%) Pula {pot_won} zł przechodzi dalej.\nPoprawna odp: {correct_text}"
+            txt_feedback.color = "red"
+
+        # --- NOWA LOGIKA UKRYWANIA I STYLOWANIA ABCD ---
+        if game_state["abcd_unlocked"]:
+            clicked_button = None
+            correct_button = None
+
+            # Znajdź przyciski
+            for btn in answers_container.controls:
+                if btn.data == user_input:
+                    clicked_button = btn
+                if btn.data == correct_text:
+                    correct_button = btn
+
+            # Ukryj wszystkie przyciski
+            for btn in answers_container.controls:
+                btn.visible = False
+
+            # Pokaż i styluj ten, który kliknąłeś
+            if clicked_button:
+                clicked_button.visible = True
+                if is_correct:
+                    clicked_button.style = ft.ButtonStyle(bgcolor="green_200", color="black")
+                else:
+                    clicked_button.style = ft.ButtonStyle(bgcolor="red_200", color="black")
+
+            # Pokaż i styluj poprawny (jeśli byłeś w błędzie i nie jest to ten sam przycisk)
+            if not is_correct and correct_button:
+                correct_button.visible = True
+                correct_button.style = ft.ButtonStyle(bgcolor="green_200", color="black")
+        # --- KONIEC NOWEJ LOGIKI ---
 
         update_money_display()
         update_pot_display()
@@ -551,8 +566,9 @@ def main(page: ft.Page):
         check_answer(user_text)
 
     def handle_abcd_answer(e):
-        selected_answer_text = e.control.data
-        check_answer(selected_answer_text)
+        # Ta funkcja teraz tylko przekazuje odpowiedź. Resztę robi check_answer.
+        selected_answer = e.control.data
+        check_answer(selected_answer)
 
     def buy_hint_5050(e):
         if not game_state["abcd_unlocked"]:
@@ -563,11 +579,13 @@ def main(page: ft.Page):
 
         hint_cost = random.randint(500, 2500)
 
+        # --- POPRAWKA TUTAJ ---
         if game_state["money"] < hint_cost:
-            txt_feedback.value = f"{hint_cost} zł? Ej mordeczko, tyle kasy to już nie masz :-)"
-            txt_feedback.color = "red"
+            txt_feedback.value = f"{hint_cost}zł ? Ej mordeczko, tyle kasy to już nie masz :-)"
+            txt_feedback.color = "orange"
             if page: page.update(txt_feedback)
             return
+        # --- KONIEC POPRAWKI ---
 
         game_state["money"] -= hint_cost
         game_state["money_spent_on_hints"] += hint_cost
@@ -594,11 +612,13 @@ def main(page: ft.Page):
     def buy_abcd_options(e):
         cost = random.randint(1000, 3000)
 
+        # --- POPRAWKA TUTAJ ---
         if game_state["money"] < cost:
-            txt_feedback.value = f"{cost} zł? Ej mordeczko, tyle kasy to już nie masz :-)"
-            txt_feedback.color = "red"
+            txt_feedback.value = f"{cost}zł ? Ej mordeczko, tyle kasy to już nie masz :-)"
+            txt_feedback.color = "orange"
             if page: page.update(txt_feedback)
             return
+        # --- KONIEC POPRAWKI ---
 
         game_state["money"] -= cost
         game_state["money_spent_on_hints"] += cost
@@ -640,8 +660,12 @@ def main(page: ft.Page):
     def toggle_answer_buttons(disabled: bool):
         for btn in answers_container.controls:
             btn.disabled = disabled
-            btn.style = None
-            btn.visible = True
+            # Pokaż je z powrotem, jeśli włączamy
+            if not disabled:
+                btn.visible = True
+            if disabled:
+                # Resetuj styl, ale nie widoczność
+                btn.style = ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10))
         if page:
             page.update(answers_container)
 
@@ -677,7 +701,11 @@ def main(page: ft.Page):
         game_state["abcd_unlocked"] = False
         answers_container.visible = False
         answers_container.controls.clear()
+        # Zresetuj widoczność przycisków ABCD
         toggle_answer_buttons(disabled=False)
+        for btn in answers_container.controls:
+            btn.visible = True
+
         btn_hint_5050.disabled = True
 
         txt_feedback.value = "Odpowiedz na pytanie:"
@@ -765,7 +793,7 @@ def main(page: ft.Page):
         txt_feedback.value = f"Stawka {stake} zł dodana do puli. Licytuj!"
         txt_feedback.color = "black"
 
-        txt_question.visible = False
+        txt_question.visible = False  # KLUCZOWA ZMIANA
         answer_ui_container.visible = False
         btn_next.visible = False
         btn_back_to_menu.visible = False
@@ -827,12 +855,13 @@ def main(page: ft.Page):
         """Pokazuje menu główne, ukrywa widok gry."""
         game_view.visible = False
         main_menu_view.visible = True
+        main_menu_feedback.visible = False  # Ukryj błąd przy powrocie
 
         if hasattr(page, 'dialog') and page.dialog:
             page.dialog.open = False
 
         if page:
-            page.update(game_view, main_menu_view, page.dialog)
+            page.update(game_view, main_menu_view, page.dialog, main_menu_feedback)
 
     def restart_current_set(e):
         """Resetuje stan gry i zaczyna ten sam zestaw od nowa."""
@@ -847,11 +876,15 @@ def main(page: ft.Page):
         """
         Główna funkcja wczytująca zestaw pytań i przełączająca widok.
         """
-        # Przekazujemy 'page' do parsera
+        # POPRAWKA: Przekazujemy 'page' do parsera
         loaded_questions = parse_question_file(page, set_filename)
 
+        # POPRAWKA: Logika obsługi błędów
         if not loaded_questions:
-            return
+            main_menu_feedback.value = f"Błąd: Nie można wczytać pliku '{set_filename}'. Sprawdź, czy plik istnieje w 'assets' i ma poprawny format."
+            main_menu_feedback.visible = True
+            if page: page.update(main_menu_feedback)
+            return  # Zostajemy w menu
 
         game_state["active_question_set"] = loaded_questions
         game_state["total_questions"] = len(loaded_questions)
@@ -860,12 +893,13 @@ def main(page: ft.Page):
         reset_game_state()
 
         main_menu_view.visible = False
+        main_menu_feedback.visible = False  # Ukryj błąd po udanym wczytaniu
         game_view.visible = True
 
         start_bidding_phase()
 
         if page:
-            page.update(main_menu_view, game_view)
+            page.update(main_menu_view, game_view, main_menu_feedback)
 
     # --- Układ Strony (Layout) ---
     btn_back_to_menu.on_click = go_to_main_menu
@@ -882,6 +916,5 @@ def main(page: ft.Page):
 
 # Uruchomienie aplikacji Flet
 if __name__ == "__main__":
-    # 'assets_dir' jest ważne dla lokalnego developmentu
-    # i jest ignorowane podczas 'flet build' (co jest dobre)
+    # KLUCZOWE: 'assets_dir' mówi Fletowi, aby spakował ten folder.
     ft.app(target=main, assets_dir=ASSETS_DIR)
