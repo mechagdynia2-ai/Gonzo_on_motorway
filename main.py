@@ -1,960 +1,908 @@
-import flet as ft, asyncio, random
-from flet import canvas as cv
-from dataclasses import dataclass
-from collections import defaultdict
+import flet as ft
+import random
+import time
+import re
+import os
+# Wymagana biblioteka do "fuzzy matching"
+from thefuzz import fuzz
 
-# ---- Audio migration: We ONLY use flet_audio ----
-#
-# IMPORTANT: The old ft.Audio module (which you used as a fallback)
-# is deprecated and CAUSES "unknown control" errors and no sound on Android.
-#
-# For this version to work, you MUST add `flet_audio` to your project
-# dependencies (e.g., in requirements.txt if building an APK).
-#
-# The correct command is:
-# pip install flet_audio
-#
-try:
-    from flet_audio import Audio as AudioCtrl
-except ImportError:
-    print("=" * 80)
-    print(" ERROR: 'flet_audio' module not found. ")
-    print(" The game will have no sound and may not work correctly on mobile.")
-    print(" Install it using: pip install flet_audio")
-    print(" And add 'flet_audio' to your requirements.txt before building the APK.")
-    print("=" * 80)
+# --- STAŁA: Folder z zasobami ---
+ASSETS_DIR = "assets"
 
 
-    # Create a dummy class so the program can run, but nothing will play
-    class AudioCtrl:
-        def __init__(self, *args, **kwargs): pass
+# --------------------
 
-        def play(self): print("Audio-Stub: Play")
+def parse_question_file(filename: str) -> list:
+    """
+    Wczytuje plik .txt z folderu ASSETS_DIR i parsuje go do formatu listy pytań.
+    Zwraca listę słowników [ { "question": ..., "correct": ..., "answers": [...] }, ... ]
+    """
+    parsed_questions = []
 
-        def update(self): pass
+    # Tworzymy pełną ścieżkę do pliku w folderze 'assets'
+    filepath = os.path.join(ASSETS_DIR, filename)
 
-        def on_ended(self, *args): pass
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        # Usunięto print
+        return []
+    except Exception as e:
+        # Usunięto print
+        return []
 
-        def seek(self, *args): pass
+    # Dzielimy plik na bloki na podstawie numeru pytania (np. "01.", "02.", "10.")
+    question_blocks = re.split(r'\n(?=\d+\.)', content)
 
-        volume = 0.0
-        src = ""
-        autoplay = False
+    for block in question_blocks:
+        block = block.strip()
+        if not block:
+            continue
 
-# --- Config (start; will be recalculated on resize) ---
-W, H, GRID = 800, 600, 40
-# START_X is now calculated dynamically (W // 2)
-LANES_Y = [GRID * 4, GRID * 6, GRID * 8, GRID * 10]
-START_X, START_Y, PLAYER_SIZE = W // 2, GRID * 13, GRID
-# GAMEPLAY FIX: Increased MIN_GAP to prevent cars bunching up
-FPS_SLEEP, MAX_LEVEL, MIN_GAP = 0.05, 60, int(GRID * 1.5)  # Było 0.75
-HEART_RED, HEART_WHITE = "#ff3b30", "#ffffff"
+        # Stosujemy WZORZEC ELASTYCZNY do każdego pojedynczego bloku
+        # Używamy (?:...) aby grupy nieprzechwytujące nie psuły kolejności .group()
+        match = re.match(
+            r"^\d+\.\s(.*?)\n"  # Grupa 1: Pytanie
+            # Elastyczna linia dla "prawidłowa odpowiedź = "
+            r"prawid(?:l|ł)owa\s+odpowied(?:z|ź)\s*=\s*(.*?)\n"  # Grupa 2: Prawidłowa odpowiedź
+            # Elastyczna linia dla "odpowiedz ABCD = "
+            r"odpowied(?:z|ź)\s+abcd\s*=\s*A\s*=\s*(.*?), B\s*=\s*(.*?), C\s*=\s*(.*?), D\s*=\s*(.*?)$",
+            block, re.DOTALL | re.IGNORECASE  # Flagi: DOTALL (. działa na linie) i IGNORECASE (ignoruj wielk. liter)
+        )
 
-ANIM_DT_TICKS = 2  # 0.1 s at FPS_SLEEP=0.05
-HONK_REACT_TICKS = 10  # 0.5 s
-IDLE_RANDOM_AFTER = 100  # 5.0 s without movement
+        if match:
+            try:
+                # Grupa 1: Pytanie
+                question = match.group(1).strip()
+                # Grupa 2: Prawidłowa odpowiedź (Teraz poprawnie)
+                correct = match.group(2).strip()
+                # Grupy 3-6: Odpowiedzi ABCD (Teraz poprawnie)
+                answers = [
+                    match.group(3).strip(),
+                    match.group(4).strip(),
+                    match.group(5).strip(),
+                    match.group(6).strip(),
+                ]
 
+                parsed_questions.append({
+                    "question": question,
+                    "correct": correct,
+                    "answers": answers
+                })
+            except Exception as e:
+                # Usunięto print
+                pass
+        else:
+            # Usunięto print
+            pass
 
-def rects_intersect(ax, ay, aw, ah, bx, by, bw, bh):
-    return (ax < bx + bw and ax + aw > bx and ay < by + bh and ay + ah > by)
-
-
-# --- colors / shadows ---
-def _clamp(x, a=0, b=255): return max(a, min(b, int(x)))
-
-
-def _hex_to_rgb(h):
-    h = h.lstrip("#")
-    if len(h) == 3: h = "".join([c * 2 for c in h])
-    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-
-
-def _rgb_to_hex(rgb): return "#" + "".join(f"{_clamp(c):02x}" for c in rgb)
-
-
-def shade(hex_color: str, factor: float) -> str:
-    r, g, b = _hex_to_rgb(hex_color)
-    if factor >= 1:
-        r = r + (255 - r) * (factor - 1)
-        g = g + (255 - g) * (factor - 1)
-        b = b + (255 - b) * (factor - 1)
-    else:
-        r *= factor;
-        g *= factor;
-        b *= factor
-    return _rgb_to_hex((int(r), int(g), int(b)))
-
-
-# Paint helpers
-FILL = lambda color: ft.Paint(color=color)
-STROKE = lambda color, w=2: ft.Paint(color=color, stroke_width=w, style=ft.PaintingStyle.STROKE)
-
-
-def RRECT(x, y, w, h, r, paint):
-    if hasattr(cv, "RRect"):
-        return cv.RRect(x, y, w, h, r, paint=paint)
-    # Fallback for older Flet versions (or where RRect isn't available)
-    return cv.Rect(x, y, w, h, paint=paint)
+    return parsed_questions
 
 
-@dataclass
-class BloodStain:
-    x: float;
-    y: float;
-    t: int = 0;
-    max_t: int = 30  # Changed from 60 to 30 for faster fade
+def normalize_answer(text: str) -> str:
+    """
+    Normalizuje odpowiedź:
+    - usuwa wielkość liter
+    - usuwa spacje na początku i końcu
+    - zamienia polskie diakrytyki (ó->o, ł->l, ż/ź->z, itp.)
+    - zamienia 'u' na 'o' (zgodnie z prośbą ó-u-o)
+    - usuwa wszystkie wewnętrzne spacje (zgodnie z "mounteverest")
+    """
+    text = str(text).lower().strip()
 
-    def alive(self): return self.t < self.max_t
-
-    def step(self): self.t += 1
-
-
-@dataclass
-class Car:
-    y: float;
-    speed: float;
-    length: float;
-    color: str;
-    x: float
-    honk_timer: int = 0
-
-    def is_near(self, px, py):
-        if py != self.y: return False
-        thr = 4 * GRID
-        return ((self.speed > 0 and self.x + self.length < px and px - (self.x + self.length) < thr) or
-                (self.speed < 0 and px + PLAYER_SIZE < self.x and self.x - (px + PLAYER_SIZE) < thr))
-
-    def collides(self, px, py):
-        return rects_intersect(px, py, PLAYER_SIZE, PLAYER_SIZE, self.x, self.y, self.length, GRID)
-
-
-class GonzoGame:
-    SPEED_SEGMENTS = [(20, 1), (30, 4), (35, 6), (38, 10), (40, 30), (45, 40),
-                      (50, 50), (55, 60), (58, 70), (60, 100)]
-    BASE_STEP, START_MULT = 0.12, 1.8
-
-    # --- sprite files ---
-    SPRITES = {
-        "START": "assets/START.POSITION.06.png",
-        "FUCK": "assets/FUCK.OFF.09.png",
-        "STEP_FRONT": [
-            "assets/01.STEP.FRONT.03.png",
-            "assets/02.STEP.FRONT.07.png",
-            "assets/03.STEP.FRONT.08.png",
-        ],
-        "LOOK_BACK": "assets/LOOK.BACK.02.png",
-        "STEP_BACK": "assets/STEP.BACK.04.png",
-        "LOOK_LEFT": "assets/LOOK.LEFT.01.png",
-        "LOOK_RIGHT": "assets/LOOK.RIGHT.05.png",
+    # Słownik zamian diakrytyków
+    diacritics = {
+        'ó': 'o', 'ł': 'l', 'ż': 'z', 'ź': 'z', 'ć': 'c',
+        'ń': 'n', 'ś': 's', 'ą': 'a', 'ę': 'e', 'ü': 'u'
     }
 
-    ALL_SPRITES_FOR_IDLE = [
-        "assets/01.STEP.FRONT.03.png",
-        "assets/02.STEP.FRONT.07.png",
-        "assets/03.STEP.FRONT.08.png",
-        "assets/FUCK.OFF.09.png",
-        "assets/LOOK.BACK.02.png",
-        "assets/LOOK.LEFT.01.png",
-        "assets/LOOK.RIGHT.05.png",
-        "assets/START.POSITION.06.png",
-        "assets/STEP.BACK.04.png",
-    ]
+    for char, replacement in diacritics.items():
+        text = text.replace(char, replacement)
 
-    def __init__(self, page: ft.Page):
-        self.p = page
-        self.p.title = "Gonzo on Motorway — Flet (Responsive Canvas + Audio + Sprites)"
-        self.p.on_keyboard_event = self.on_key
-        self.p.padding = 0
-        self.p.window_maximized = True
+    # Zamiana 'u' na 'o' (jak w 'ó-u-o')
+    text = text.replace('u', 'o')
 
-        # Handle window resizing (phone/rotation)
-        self.p.on_resize = self._on_resize
+    # Usunięcie wszystkich spacji
+    text = "".join(text.split())
 
-        self.p.appbar = ft.AppBar(
-            title=ft.Text("Gonzo on Motorway"),
-            center_title=False,
-            bgcolor=ft.Colors.with_opacity(0.05, "#ffffff"),
-            actions=[ft.TextButton("Close", on_click=lambda e: self.exit_game())],
-        )
+    return text
 
-        # --- AUDIO (flet_audio only) ---
-        self._sfx_pool_idx = {"honk": 0, "step": 0}
-        self.sfx = {
-            "hit": [AudioCtrl(src="assets/hit.wav", volume=1.0)],
-            "level": [AudioCtrl(src="assets/level.wav", volume=1.0)],
-            "honk": [AudioCtrl(src="assets/honk.wav", volume=0.5) for _ in range(3)],
-            "step": [AudioCtrl(src="assets/step.wav", volume=0.35) for _ in range(2)],
-        }
-        self._bgm_tracks = [f"assets/audio{str(i).zfill(2)}.wav" for i in range(1, 9)]
-        self._last_bgm = None
-        self.bgm = AudioCtrl(src=self._pick_next_bgm(), volume=0.25, autoplay=True)
-        self.bgm.on_ended = lambda e: self._bgm_next()
 
-        # Add audio controls to page overlay (required)
-        for lst in self.sfx.values():
-            for a in lst:
-                self.p.overlay.append(a)
-        self.p.overlay.append(self.bgm)
-        self.p.update()  # Required to register audio controls
+def main(page: ft.Page):
+    page.title = "Awantura o Kasę - Singleplayer"
+    page.vertical_alignment = ft.MainAxisAlignment.START
+    page.window_width = 600
+    page.window_height = 800
+    page.theme_mode = ft.ThemeMode.LIGHT
 
-        # AUDIO FIX: Create a robust, async play function
-        async def _async_play(audio_control: AudioCtrl):
-            """Robustly seeks to 0 and plays audio, as a separate task."""
-            try:
-                # await audio_control.seek(0) # 'await' might be problematic
-                audio_control.seek(0)
-                audio_control.play()
-            except Exception as e:
-                print(f"Error in _async_play: {e}")
+    # --- Zmienne stanu gry ---
+    game_state = {
+        "money": 10000,
+        "current_question_index": -1,
+        "base_stake": 500,  # Kwota stawki za pytanie
+        "abcd_unlocked": False,
+        "main_pot": 0,  # Główna pula wygranej
+        "money_spent_on_hints": 0,  # Licznik wydatków
+        "current_bid_amount": 0,  # Ile zalicytowano w tej rundzie
+        "max_bid_per_round": 5000,  # Limit licytacji na rundę
+        "current_bonus_pot": 0,
+        "active_question_set": [],  # Lista pytań załadowana z pliku
+        "total_questions": 0,  # Całkowita liczba pytań w zestawie
+        "set_name": ""  # Nazwa zestawu (np. "01")
+    }
 
-        self._async_play = _async_play
+    # --- Kontrolki Flet (Elementy UI) ---
 
-        def _play_sfx(key: str):
-            """Finds an audio control and plays it using the async helper."""
-            if key not in self.sfx: return
-            try:
-                a = None
-                if key in ("honk", "step"):
-                    i = self._sfx_pool_idx[key]
-                    a = self.sfx[key][i]
-                    self._sfx_pool_idx[key] = (i + 1) % len(self.sfx[key])
-                else:
-                    a = self.sfx[key][0]
+    # --- WIDOK 1: EKRAN GRY ---
+    txt_money = ft.Text(
+        value=f"Twoja kasa: {game_state['money']} zł",
+        size=16,
+        weight=ft.FontWeight.BOLD,
+        color="green_600"
+    )
 
-                # AUDIO FIX: Run the async play function as a task
-                self.p.run_task(self._async_play, a)
+    txt_money_spent = ft.Text(
+        value="Wydano: 0 zł",
+        size=14,
+        color="grey_700",
+        text_align=ft.TextAlign.RIGHT
+    )
 
-            except Exception as e:
-                print(f"Error playing sfx '{key}': {e}")
+    txt_question_counter = ft.Text(
+        value="Pytanie 0 / 0 (Zestaw 00)",
+        size=16,
+        color="grey_700",
+        text_align=ft.TextAlign.CENTER
+    )
 
-        self._play_sfx = _play_sfx
+    txt_main_pot = ft.Text(
+        value=f"AKTUALNA PULA: 0 zł",
+        size=22,
+        weight=ft.FontWeight.BOLD,
+        color="purple_600",
+        text_align=ft.TextAlign.CENTER
+    )
 
-        # --- state ---
-        self.level = 1;
-        self.score = 0;
-        self.lives = 4;
-        self.game_over = False;
-        self.tick = 0
-        self.checkpoint_level = 1;
-        self.checkpoint_score = 0
+    txt_bonus_pot = ft.Text(
+        value="Bonus od banku: 0 zł",
+        size=16,
+        color="blue_600",
+        text_align=ft.TextAlign.CENTER,
+        visible=False
+    )
 
-        # --- PLAYER: Image in a Container (scalable) ---
-        self.player_img = ft.Image(src=self.SPRITES["START"], fit=ft.ImageFit.CONTAIN)
-        self.player = ft.Container(content=self.player_img)
+    txt_question = ft.Text(
+        value="Wciśnij 'Start', aby rozpocząć grę!",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        text_align=ft.TextAlign.CENTER
+    )
 
-        # sprite animation
-        self.anim_tick_acc = 0
-        self.last_move_tick = 0
-        self.move_anim_until = 0
-        self.current_dir = "front"
-        self.step_front_idx = 0
-        self.left_cycle_idx = 0
-        self.right_cycle_idx = 0
-        self.back_toggle = False
-        self.honk_until = 0
+    txt_feedback = ft.Text(value="", size=16, text_align=ft.TextAlign.CENTER)
 
-        # --- HUD (now part of the game world) ---
-        self.txt_level = ft.Text()
-        # UI FIX: Split speed text into two lines to prevent overflow
-        self.txt_speed_line1 = ft.Text()
-        self.txt_speed_line2 = ft.Text()
-        self.txt_score = ft.Text()
-        self.hearts_row = ft.Row(spacing=4)
-        self.btn_mute = ft.IconButton(
-            icon=ft.Icons.VOLUME_UP, tooltip="Mute/Unmute (M)",
-            on_click=lambda e: self.toggle_mute()
-        )
+    # --- Kontrolki UI Odpowiedzi (grupowane) ---
+    txt_answer_field = ft.TextField(
+        label="Wpisz swoją odpowiedź...",
+        width=400,
+        text_align=ft.TextAlign.CENTER,
+        capitalization=ft.TextCapitalization.SENTENCES
+    )
 
-        # UI FIX: Create a Column for the new speed text
-        speed_col = ft.Column(
-            [self.txt_speed_line1, self.txt_speed_line2],
-            spacing=0
-        )
+    btn_submit_answer = ft.Button(
+        text="Zatwierdź odpowiedź",
+        icon="check",
+        on_click=None,
+        width=400,
+    )
 
-        self.hud = ft.Container(
-            content=ft.Row(
-                [
-                    self.txt_level,
-                    ft.Container(width=10),
-                    speed_col,  # Use the new Column here
-                    ft.Container(expand=True),
-                    self.btn_mute,
-                    ft.Container(width=12),
-                    self.txt_score,
-                    ft.Container(width=12),
-                    self.hearts_row
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN
-            ),
-            # Position and width will be set in _recalc_layout
-            top=0, left=0,
-        )
+    answers_container = ft.Column(
+        controls=[],
+        spacing=10,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        visible=False
+    )
 
-        # --- Overlays (messages) ---
-        self.death_msg = ft.Text()
+    answer_ui_container = ft.Column(
+        [
+            txt_answer_field,
+            btn_submit_answer,
+            answers_container,  # Kontener na przyciski ABCD
+        ],
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        visible=False  # Ukryty na starcie
+    )
 
-        self.death_msg_cont = ft.Container(
-            content=self.death_msg,
-            alignment=ft.alignment.center_left,  # Aligned left, on the bottom grass
-            padding=ft.padding.only(left=20),
-            visible=False  # This container controls visibility
-        )
+    # --- Kontrolki UI Licytacji (grupowane) ---
+    btn_bid_100 = ft.Button(
+        text="Licytuj +100 zł (Suma: 0 zł)",
+        icon="add",
+        on_click=None,
+        width=400,
+    )
 
-        self.center_prompt = ft.Text()
-        self.center_prompt_cont = ft.Container(
-            content=self.center_prompt,
-            alignment=ft.alignment.center,
-            visible=False
-        )
+    btn_start_answering = ft.Button(
+        text="Pokaż pytanie",  # Zmieniony tekst
+        icon="gavel",
+        on_click=None,
+        width=400,
+    )
 
-        self.level_banner = ft.Text()
-        self.level_banner_cont = ft.Container(
-            content=self.level_banner,
-            alignment=ft.alignment.center,
-            visible=False
-        )
+    bidding_container = ft.Column(
+        [
+            btn_bid_100,
+            btn_start_answering,
+        ],
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        visible=False  # Ukryty na starcie
+    )
 
-        self.banner_ticks = 0
-        self.btn_restart_cp = ft.ElevatedButton(
-            "Restart (checkpoint)",
-            on_click=lambda e: self.restart_from_checkpoint(),
-            bgcolor="#22c55e", color="#0b1014", visible=False
-        )
-        self.btn_restart_cont = ft.Container(
-            content=self.btn_restart_cp,
-            alignment=ft.alignment.center
-        )
+    # --- Kontrolki Podpowiedzi i Nawigacji ---
+    btn_hint_5050 = ft.Button(
+        text="Kup podpowiedź 50/50 (losowo 500-2500 zł)",
+        icon="lightbulb_outline",
+        on_click=None,
+        width=400,
+        disabled=True
+    )
 
-        # D-pad (created responsively)
-        self.dpad = None
+    btn_buy_abcd = ft.Button(
+        text="Kup opcje ABCD (losowo 1000-3000 zł)",
+        icon="view_list",
+        on_click=None,
+        width=400,
+        disabled=True
+    )
 
-        # world
-        self.cars: list[Car] = []
-        self.stains: list[BloodStain] = []
+    btn_next = ft.Button(
+        text="Następne pytanie",
+        on_click=None,
+        visible=False,
+        width=400
+    )
 
-        self.canvas = cv.Canvas(shapes=[])
+    btn_back_to_menu = ft.Button(
+        text="Wróć do menu",
+        icon="arrow_back",
+        on_click=None,  # Przypiszemy później
+        width=400,
+        visible=False,  # Pokażemy po zakończeniu pytania
+        color="red"
+    )
 
-        self.world = ft.Stack(
-            controls=[
-                self.canvas,
-                self.player,
-                self.hud,  # HUD is here now
-                self.death_msg_cont,
-                self.center_prompt_cont,
-                self.level_banner_cont,
-                self.btn_restart_cont,
-                # dpad will be inserted after layout calculation
-            ]
-        )
-
-        # SCALING FIX: self.root must center the game world
-        self.root = ft.Column(
-            [self.world],
-            spacing=0,
-            expand=True,
-            # Add centering alignment
-            alignment=ft.MainAxisAlignment.CENTER,
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER
-        )
-        self.p.add(self.root)
-        self.p.update()
-
-        # initial layout (after update, width/height are known)
-        self._recalc_layout(initial=True, size=(self.p.width or 800, self.p.height or 600))
-        self.reset_player();
-        self.create_cars();
-        self.update_hud();
-        self.p.update()
-        self.show_level_banner()
-        self.redraw_canvas()
-
-    # ---- RESPONSIVENESS ----
-    def _on_resize(self, e: ft.ControlEvent):
-        # e.width, e.height are the *entire* page dimensions
-        self._recalc_layout(size=(e.width, e.height))
-
-    def _recalc_layout(self, initial=False, size: tuple[int, int] | None = None):
-        """Fit W,H,GRID, etc., to the screen size; rescale elements."""
-        global W, H, GRID, PLAYER_SIZE, START_X, START_Y, LANES_Y, MIN_GAP
-
-        oldW, oldGRID = W, GRID
-
-        if size is not None:
-            win_w, win_h = size
-        else:
-            win_w = self.p.width or 800
-            win_h = self.p.height or 600
-
-        appbar_h = 56  # Approximate appbar height
-        avail_w = int(win_w)
-        avail_h = max(240, int(win_h - appbar_h))
-
-        # SCALING FIX: Reverted to "stretch-to-fill" logic.
-        # W and H will fill the available space.
-        W, H = avail_w, avail_h
-
-        # GRID is now based on HEIGHT only (15 units high)
-        GRID = max(16, int(H / 15))
-        # --- End Scaling Fix ---
-
-        PLAYER_SIZE = GRID
-
-        # GAMEPLAY FIX: Update MIN_GAP based on new GRID
-        MIN_GAP = int(GRID * 1.5)
-
-        # START_X is centered in the *new* (potentially wide) W
-        START_X = (W // (GRID * 2)) * GRID  # Find center-ish grid line
-        START_Y = GRID * 13  # 13 grids from top (2 from bottom)
-        LANES_Y = [GRID * 4, GRID * 6, GRID * 8, GRID * 10]
-
-        # Font sizes / UI
-        # UI FIX: Reduced font sizes to be more responsive
-        base_txt = max(12, int(GRID * 0.60))
-        speed_txt_size = max(10, int(GRID * 0.45))
-
-        self.txt_level.size = base_txt
-        self.txt_speed_line1.size = speed_txt_size
-        self.txt_speed_line2.size = speed_txt_size
-        self.txt_score.size = base_txt
-
-        self.death_msg.size = max(20, int(GRID * 1.0))
-        self.center_prompt.size = max(12, int(GRID * 0.40))
-        self.level_banner.size = max(14, int(GRID * 0.50))
-
-        # Colors
-        self.txt_level.color = "#000000"
-        self.txt_speed_line1.color = "#000000"
-        self.txt_speed_line2.color = "#000000"
-        self.txt_score.color = "#000000"
-
-        self.death_msg.color = "#ff453a"
-        self.level_banner.color = "#ffd166"
-        self.center_prompt.color = "#fff"
-
-        # Set Canvas / World size to fill the new W and H
-        self.canvas.width = W
-        self.canvas.height = H
-        self.world.width = W
-        self.world.height = H
-
-        # Set HUD to full width
-        self.hud.width = W
-        self.hud.padding = ft.padding.only(left=10, right=10, top=max(4, int(GRID * 0.2)))
-
-        # Overlay positions dependent on W,H
-        self.level_banner_cont.width = W
-        self.level_banner_cont.top = GRID * 1.5  # Below HUD
-
-        self.center_prompt_cont.width = W
-        self.center_prompt_cont.top = H / 2 - int(GRID * 1.8)
-
-        self.death_msg_cont.width = W
-        self.death_msg_cont.top = GRID * 12.5  # On the bottom green grass
-
-        # Restart Button
-        self.btn_restart_cp.width = int(GRID * 6.5)
-        self.btn_restart_cp.height = int(GRID * 1.0)
-        self.btn_restart_cont.width = W
-        self.btn_restart_cont.height = H  # Fills background to center
-
-        # SCALING FIX: Removed world_container logic
-
-        # D-pad: rebuild (remove old, add new)
-        if self.dpad and self.dpad in self.world.controls:
-            self.world.controls.remove(self.dpad)
-        self.dpad = self._build_dpad_responsive()
-        self.world.controls.append(self.dpad)  # Add to the end (on top)
-        self.world.update()
-
-        # Rescale player (size + position to new grid)
-        self.player.width = PLAYER_SIZE
-        self.player.height = PLAYER_SIZE
-        self.player_img.width = PLAYER_SIZE
-        self.player_img.height = PLAYER_SIZE
-
-        if not initial and oldGRID > 0 and oldW > 0:
-            gx = round((self.player.left or START_X) / oldGRID)
-            gy = round((self.player.top or START_Y) / oldGRID)
-            self.player.left = max(0, min(W - PLAYER_SIZE, gx * GRID))
-            self.player.top = max(0, min(H - PLAYER_SIZE, gy * GRID))
-        else:
-            self.player.left = START_X
-            self.player.top = START_Y
-        self.player.update()
-        self.player_img.update()
-
-        # Rescale cars
-        if self.cars:
-            sx = W / oldW if oldW else 1.0
-            sg = GRID / oldGRID if oldGRID else 1.0
-            for car in self.cars:
-                car.x *= sx
-                car_y_idx = round(car.y / (oldGRID or GRID))
-                car.y = car_y_idx * GRID
-                car.length *= sg
-
-        self.redraw_canvas()
-        self.update_hud()
-        self.p.update()
-
-    def _build_dpad_responsive(self):
-        btn_size = int(GRID * 1.3)
-        gap = max(4, int(GRID * 0.15))
-        pad = max(8, int(GRID * 0.35))
-
-        base_left = W - (btn_size * 3 + gap * 2) - pad
-        base_top = H - (btn_size * 3 + gap * 2) - pad
-
-        def btn(icon, dx, dy, left, top):
-            return ft.Container(
-                left=left, top=top, width=btn_size, height=btn_size,
-                bgcolor=ft.Colors.with_opacity(0.15, "#ffffff"),
-                border_radius=999,
-                content=ft.IconButton(
-                    icon=icon,
-                    on_click=lambda e, dx=dx, dy=dy: self.p.run_task(self.move_player, dx, dy),
-                    style=ft.ButtonStyle(shape=ft.CircleBorder()),
-                    tooltip="Move",
+    # --- Kontener GŁÓWNEGO WIDOKU GRY ---
+    game_view = ft.Column(
+        controls=[
+            ft.Container(
+                content=ft.Row(
+                    [
+                        txt_money,
+                        txt_money_spent,
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER
                 ),
-                shadow=ft.BoxShadow(blur_radius=8, spread_radius=0, color=ft.Colors.with_opacity(0.25, "#000000"))
+                padding=ft.padding.only(left=20, right=20, top=10, bottom=5)
+            ),
+            ft.Divider(height=1, color="grey_300"),
+
+            ft.Container(
+                content=txt_question_counter,
+                alignment=ft.alignment.center,
+                padding=ft.padding.only(top=10)
+            ),
+
+            ft.Container(
+                content=txt_main_pot,
+                alignment=ft.alignment.center,
+                padding=ft.padding.only(top=10, bottom=5)
+            ),
+
+            ft.Container(
+                content=txt_bonus_pot,
+                alignment=ft.alignment.center,
+                padding=ft.padding.only(bottom=5)
+            ),
+
+            ft.Container(
+                content=txt_question,
+                alignment=ft.alignment.center,
+                padding=ft.padding.only(left=20, right=20, top=10, bottom=10),
+                height=100
+            ),
+
+            bidding_container,
+            answer_ui_container,
+
+            ft.Divider(height=20, color="transparent"),
+
+            # ZMIANA KOLEJNOŚCI TUTAJ
+            ft.Column(
+                [
+                    btn_hint_5050,
+                    btn_buy_abcd,
+                    btn_next,
+                    txt_feedback,  # Przeniesiony tutaj
+                    btn_back_to_menu,
+                ],
+                spacing=10,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER
+            )
+        ],
+        visible=False  # Na starcie ukryty
+    )
+
+    # --- WIDOK 2: EKRAN GŁÓWNY (MENU) ---
+    menu_tiles_standard = []
+    for i in range(1, 31):
+        filename = f"{i:02d}.txt"
+        filepath = os.path.join(ASSETS_DIR, filename)
+        file_exists = os.path.exists(filepath)
+
+        menu_tiles_standard.append(
+            ft.Button(
+                # ZMIANA: Używamy 'content' zamiast 'text' aby kontrolować czcionkę
+                content=ft.Text(value=f"{i:02d}", size=12),
+                tooltip=f"Zestaw {i:02d}",
+                width=35,  # ZMIANA: Mniejszy przycisk
+                height=35, # ZMIANA: Mniejszy przycisk
+                on_click=lambda e, f=filename: start_game_session(e, f),
+                disabled=not file_exists,
+                style=ft.ButtonStyle(
+                    bgcolor="blue_grey_50" if file_exists else "grey_300"
+                )
+            )
+        )
+
+    menu_tiles_popkultura = []
+    for i in range(31, 41):
+        filename = f"{i:02d}.txt"
+        filepath = os.path.join(ASSETS_DIR, filename)
+        file_exists = os.path.exists(filepath)
+
+        menu_tiles_popkultura.append(
+            ft.Button(
+                content=ft.Text(value=f"{i:02d}", size=12),
+                tooltip=f"Zestaw {i:02d}",
+                width=35,  # ZMIANA
+                height=35, # ZMIANA
+                on_click=lambda e, f=filename: start_game_session(e, f),
+                disabled=not file_exists,
+                style=ft.ButtonStyle(
+                    bgcolor="deep_purple_50" if file_exists else "grey_300"
+                )
+            )
+        )
+
+    menu_tiles_popkultura_muzyka = []
+    for i in range(41, 51):
+        filename = f"{i:02d}.txt"
+        filepath = os.path.join(ASSETS_DIR, filename)
+        file_exists = os.path.exists(filepath)
+
+        menu_tiles_popkultura_muzyka.append(
+            ft.Button(
+                content=ft.Text(value=f"{i:02d}", size=12),
+                tooltip=f"Zestaw {i:02d}",
+                width=35,  # ZMIANA
+                height=35, # ZMIANA
+                on_click=lambda e, f=filename: start_game_session(e, f),
+                disabled=not file_exists,
+                style=ft.ButtonStyle(
+                    bgcolor="amber_50" if file_exists else "grey_300"
+                )
+            )
+        )
+
+    main_menu_view = ft.Column(
+        [
+            ft.Text("Wybierz zestaw pytań:", size=24, weight=ft.FontWeight.BOLD),
+            ft.Text(f"Dostępne są tylko podświetlone zestawy (pliki .txt w folderze '{ASSETS_DIR}')."),
+            ft.Divider(height=20),
+            ft.Row(menu_tiles_standard[0:10], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
+            ft.Row(menu_tiles_standard[10:20], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
+            ft.Row(menu_tiles_standard[20:30], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
+
+            ft.Divider(height=30),
+            ft.Text("Pytania popkultura Boost:", size=24, weight=ft.FontWeight.BOLD),
+            ft.Divider(height=20),
+            ft.Row(menu_tiles_popkultura, alignment=ft.MainAxisAlignment.CENTER, wrap=True),
+
+            ft.Divider(height=30),
+            ft.Text("Pytania popkultura i muzyka boost:", size=24, weight=f"t.FontWeight.BOLD"),
+            ft.Divider(height=20),
+            ft.Row(menu_tiles_popkultura_muzyka, alignment=ft.MainAxisAlignment.CENTER, wrap=True),
+        ],
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        spacing=10,
+        visible=True  # Widoczny na starcie
+    )
+
+    # --- Funkcje Logiki Gry ---
+
+    def update_money_display():
+        txt_money.value = f"Twoja kasa: {game_state['money']} zł"
+        if game_state["money"] <= 0:
+            txt_money.value = "Kasa: 0 zł... KONIEC GRY"
+            txt_money.color = "red_800"
+        elif game_state["money"] < game_state["base_stake"]:
+            txt_money.color = "orange_600"
+        else:
+            txt_money.color = "green_600"
+        if page:
+            page.update(txt_money)
+
+    def update_spent_display():
+        txt_money_spent.value = f"Wydano: {game_state['money_spent_on_hints']} zł"
+        if page:
+            page.update(txt_money_spent)
+
+    def update_pot_display():
+        txt_main_pot.value = f"AKTUALNA PULA: {game_state['main_pot']} zł"
+        if page:
+            page.update(txt_main_pot)
+
+    def update_bonus_display():
+        txt_bonus_pot.value = f"Bonus od banku: {game_state['current_bonus_pot']} zł"
+        if page:
+            page.update(txt_bonus_pot)
+
+    def update_question_counter():
+        """Aktualizuje licznik pytań (np. 01/50)."""
+        idx = game_state["current_question_index"] + 1
+        total = game_state["total_questions"]
+        set_name = game_state["set_name"]
+        txt_question_counter.value = f"Pytanie {idx} / {total} (Zestaw {set_name})"
+        if page:
+            page.update(txt_question_counter)
+
+    def show_game_over(message: str):
+        btn_hint_5050.disabled = True
+        btn_buy_abcd.disabled = True
+        btn_next.disabled = True
+        txt_answer_field.disabled = True
+        btn_submit_answer.disabled = True
+        btn_bid_100.disabled = True
+        btn_start_answering.disabled = True
+        for btn in answers_container.controls:
+            btn.disabled = True
+
+        if page:
+            page.update(btn_hint_5050, btn_buy_abcd, btn_next, txt_answer_field, btn_submit_answer, answers_container,
+                        bidding_container)
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Koniec Gry!"),
+            content=ft.Text(message),
+            actions=[
+                ft.TextButton("Zagraj ten zestaw ponownie", on_click=lambda e: restart_current_set(e)),
+                ft.TextButton("Wróć do menu", on_click=lambda e: go_to_main_menu(e))
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+            on_dismiss=lambda e: go_to_main_menu(e)  # Domyślnie wróć do menu
+        )
+        page.dialog = dlg
+        dlg.open = True
+        if page:
+            page.update()
+
+    def check_game_over(minimum_needed: int, message: str):
+        if game_state["money"] < minimum_needed:
+            show_game_over(message)
+            return True
+        return False
+
+    def check_answer(user_input: str):
+        txt_answer_field.disabled = True
+        btn_submit_answer.disabled = True
+        btn_hint_5050.disabled = True
+        btn_buy_abcd.disabled = True
+
+        # Nowa logika ukrywania przycisków
+        toggle_answer_buttons(disabled=True)
+
+        current_q = game_state["active_question_set"][game_state["current_question_index"]]
+        correct_text = current_q["correct"]
+
+        pot_won = game_state["main_pot"]
+
+        norm_user = normalize_answer(user_input)
+        norm_correct = normalize_answer(correct_text)
+
+        similarity = fuzz.ratio(norm_user, norm_correct)
+
+        is_correct = similarity >= 80
+
+        if is_correct:
+            game_state["money"] += pot_won
+            game_state["main_pot"] = 0  # Resetuj pulę
+            txt_feedback.value = f"DOBRZE! (Podob. {similarity}%) Wygrywasz {pot_won} zł!\nPoprawna odp: {correct_text}"
+            txt_feedback.color = "green"
+        else:
+            game_state["main_pot"] = pot_won  # Pula zostaje
+            txt_feedback.value = f"ŹLE... (Podob. {similarity}%) Pula {pot_won} zł przechodzi dalej.\nPoprawna odp: {correct_text}"
+            txt_feedback.color = "red"
+
+        # --- NOWA LOGIKA UKRYWANIA I STYLOWANIA ABCD ---
+        if game_state["abcd_unlocked"]:
+            clicked_button = None
+            correct_button = None
+
+            # Znajdź przyciski
+            for btn in answers_container.controls:
+                if btn.data == user_input:
+                    clicked_button = btn
+                if btn.data == correct_text:
+                    correct_button = btn
+
+            # Ukryj wszystkie przyciski
+            for btn in answers_container.controls:
+                btn.visible = False
+
+            # Pokaż i styluj ten, który kliknąłeś
+            if clicked_button:
+                clicked_button.visible = True
+                if is_correct:
+                    clicked_button.style = ft.ButtonStyle(bgcolor="green_200", color="black")
+                else:
+                    clicked_button.style = ft.ButtonStyle(bgcolor="red_200", color="black")
+
+            # Pokaż i styluj poprawny (jeśli byłeś w błędzie i nie jest to ten sam przycisk)
+            if not is_correct and correct_button:
+                correct_button.visible = True
+                correct_button.style = ft.ButtonStyle(bgcolor="green_200", color="black")
+        # --- KONIEC NOWEJ LOGIKI ---
+
+        update_money_display()
+        update_pot_display()
+
+        btn_next.visible = True
+        btn_back_to_menu.visible = True
+
+        if page:
+            page.update(txt_feedback, btn_next, answers_container, txt_answer_field, btn_submit_answer, btn_hint_5050,
+                        btn_buy_abcd, btn_back_to_menu)
+
+    def handle_submit_answer(e):
+        user_text = txt_answer_field.value
+        check_answer(user_text)
+
+    def handle_abcd_answer(e):
+        # Ta funkcja teraz tylko przekazuje odpowiedź. Resztę robi check_answer.
+        selected_answer = e.control.data
+        check_answer(selected_answer)
+
+    def buy_hint_5050(e):
+        if not game_state["abcd_unlocked"]:
+            txt_feedback.value = "Podpowiedź 50/50 działa tylko z opcjami ABCD!"
+            txt_feedback.color = "orange"
+            if page: page.update(txt_feedback)
+            return
+
+        hint_cost = random.randint(500, 2500)
+
+        # --- POPRAWKA TUTAJ ---
+        if game_state["money"] < hint_cost:
+            txt_feedback.value = f"{hint_cost}zł ? Ej mordeczko, tyle kasy to już nie masz :-)"
+            txt_feedback.color = "orange"
+            if page: page.update(txt_feedback)
+            return
+        # --- KONIEC POPRAWKI ---
+
+        game_state["money"] -= hint_cost
+        game_state["money_spent_on_hints"] += hint_cost
+        btn_hint_5050.disabled = True
+        txt_feedback.value = f"Kupiono podpowiedź 50/50 za {hint_cost} zł."
+        txt_feedback.color = "blue"
+        update_money_display()
+        update_spent_display()
+
+        current_q = game_state["active_question_set"][game_state["current_question_index"]]
+        correct_answer = current_q["correct"]
+
+        wrong_answers = [ans for ans in current_q["answers"] if ans != correct_answer]
+        random.shuffle(wrong_answers)
+        to_remove = wrong_answers[:2]
+
+        for btn in answers_container.controls:
+            if btn.data in to_remove:
+                btn.disabled = True
+
+        if page:
+            page.update(btn_hint_5050, txt_feedback, answers_container)
+
+    def buy_abcd_options(e):
+        cost = random.randint(1000, 3000)
+
+        # --- POPRAWKA TUTAJ ---
+        if game_state["money"] < cost:
+            txt_feedback.value = f"{cost}zł ? Ej mordeczko, tyle kasy to już nie masz :-)"
+            txt_feedback.color = "orange"
+            if page: page.update(txt_feedback)
+            return
+        # --- KONIEC POPRAWKI ---
+
+        game_state["money"] -= cost
+        game_state["money_spent_on_hints"] += cost
+        game_state["abcd_unlocked"] = True
+        update_money_display()
+        update_spent_display()
+
+        txt_answer_field.visible = False
+        btn_submit_answer.visible = False
+
+        answers_container.visible = True
+        btn_buy_abcd.disabled = True
+        btn_hint_5050.disabled = False
+
+        txt_feedback.value = f"Kupiono opcje ABCD za {cost} zł."
+        txt_feedback.color = "blue"
+
+        q_data = game_state["active_question_set"][game_state["current_question_index"]]
+        answers_container.controls.clear()
+        shuffled_answers = q_data["answers"].copy()
+        random.shuffle(shuffled_answers)
+
+        for answer in shuffled_answers:
+            answers_container.controls.append(
+                ft.Button(
+                    text=answer,
+                    data=answer,
+                    on_click=handle_abcd_answer,
+                    width=400,
+                    height=50,
+                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10))
+                )
             )
 
-        up = btn(ft.Icons.KEYBOARD_ARROW_UP, 0, -1, base_left + btn_size + gap, base_top)
-        leftb = btn(ft.Icons.KEYBOARD_ARROW_LEFT, -1, 0, base_left, base_top + btn_size + gap)
-        rightb = btn(ft.Icons.KEYBOARD_ARROW_RIGHT, 1, 0, base_left + 2 * btn_size + 2 * gap, base_top + btn_size + gap)
-        down = btn(ft.Icons.KEYBOARD_ARROW_DOWN, 0, 1, base_left + btn_size + gap, base_top + 2 * btn_size + 2 * gap)
+        if page:
+            page.update(txt_answer_field, btn_submit_answer, answers_container, btn_buy_abcd, btn_hint_5050,
+                        txt_feedback)
 
-        cross = ft.Container(
-            left=base_left, top=base_top,
-            width=btn_size * 3 + gap * 2, height=btn_size * 3 + gap * 2,
-            bgcolor=ft.Colors.with_opacity(0.05, "#ffffff"), border_radius=16
-        )
-        # Return a Stack to be added to self.world
-        return ft.Stack(controls=[cross, up, leftb, rightb, down])
+    def toggle_answer_buttons(disabled: bool):
+        for btn in answers_container.controls:
+            btn.disabled = disabled
+            if disabled:
+                # Resetuj styl, ale nie widoczność
+                btn.style = ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10))
+        if page:
+            page.update(answers_container)
 
-    # ---- AUDIO helpers ----
-    def _pick_next_bgm(self):
-        choices = [t for t in self._bgm_tracks if t != self._last_bgm] or self._bgm_tracks
-        nxt = random.choice(choices);
-        self._last_bgm = nxt;
-        return nxt
+    # --- Funkcje Licytacji ---
+    def start_answering_and_load_question(e):
+        """Kończy licytację, WCZYTUJE i POKAZUJE pytanie, pokazuje UI odpowiedzi."""
 
-    def _bgm_next(self):
-        try:
-            self.bgm.src = self._pick_next_bgm();
-            self.bgm.update();
-            self.bgm.play()
-        except Exception as e:
-            print(f"Error playing BGM: {e}")
+        game_state["current_question_index"] += 1
 
-    def toggle_mute(self):
-        try:
-            if self.bgm.volume > 0:
-                self.bgm.volume = 0.0;
-                self.btn_mute.icon = ft.Icons.VOLUME_OFF
-            else:
-                self.bgm.volume = 0.25;
-                self.btn_mute.icon = ft.Icons.VOLUME_UP
-            self.bgm.update();
-            self.btn_mute.update()
-        except Exception as e:
-            print(f"Error muting: {e}")
+        if game_state["current_question_index"] >= game_state["total_questions"]:
+            show_game_over(
+                f"Gratulacje! Ukończyłeś zestaw {game_state['set_name']} z wynikiem {game_state['money']} zł!")
+            return
 
-    # --- drawing cars ---
-    def _car_shapes(self, c: Car):
-        L, Ht, x, y = c.length, GRID, c.x, c.y
-        dir_right = c.speed > 0
-        if x + L < 0 or x > W: return []
-        shapes = []
-        shapes.append(RRECT(x, y, L, Ht, 8, paint=FILL(c.color)))
-        roof_col = shade(c.color, 0.85 if hash((int(c.x), int(c.y))) % 2 == 0 else 1.12)
-        roof_w, roof_h = L * 0.60, Ht * 0.40
-        roof_left, roof_top = x + (L - roof_w) / 2, y + (Ht - roof_h) / 2
-        shapes.append(RRECT(roof_left, roof_top, roof_w, roof_h, 6, paint=FILL(roof_col)))
-        glass_color = "#111827"
-        ring_stroke = max(6, int(Ht * 0.18))
-        shapes.append(
-            RRECT(roof_left, roof_top, roof_w, roof_h, min(12, Ht // 2), paint=STROKE(glass_color, ring_stroke)))
-        light_len, light_th = min(int(GRID * 0.45), max(10, int(L * 0.08))), max(3, int(GRID * 0.10))
-        off_y1, off_y2 = int(y + Ht * 0.28), int(y + Ht * 0.68)
-        if dir_right:
-            front_x, back_x = int(x + L - light_len - 2), int(x + 2)
+        update_question_counter()
+
+        q_data = game_state["active_question_set"][game_state["current_question_index"]]
+        txt_question.value = q_data["question"]
+        txt_question.visible = True
+
+        bidding_container.visible = False
+        txt_bonus_pot.visible = False
+
+        answer_ui_container.visible = True
+        txt_answer_field.visible = True
+        txt_answer_field.disabled = False
+        txt_answer_field.value = ""
+        btn_submit_answer.visible = True
+        btn_submit_answer.disabled = False
+
+        btn_buy_abcd.disabled = False
+
+        game_state["abcd_unlocked"] = False
+        answers_container.visible = False
+        answers_container.controls.clear()
+        btn_hint_5050.disabled = True
+
+        txt_feedback.value = "Odpowiedz na pytanie:"
+        txt_feedback.color = "black"
+
+        btn_submit_answer.on_click = handle_submit_answer
+        btn_hint_5050.on_click = buy_hint_5050
+        btn_buy_abcd.on_click = buy_abcd_options
+        btn_next.on_click = start_bidding_phase
+
+        if page:
+            page.update(bidding_container, answer_ui_container, txt_answer_field,
+                        btn_submit_answer, btn_buy_abcd, btn_hint_5050, txt_feedback,
+                        answers_container, txt_question, txt_bonus_pot)
+
+    def bid_100(e):
+        """Dodaje 100 zł do puli z kasy gracza."""
+        bid_amount = 100
+        current_bid = game_state["current_bid_amount"]
+        max_bid = game_state["max_bid_per_round"]
+
+        if check_game_over(bid_amount, "Próbowałeś zalicytować, ale nie masz już pieniędzy! Koniec gry."):
+            return
+
+        if current_bid >= max_bid:
+            txt_feedback.value = f"Osiągnięto maksymalny limit licytacji ({max_bid} zł) w tej rundzie."
+            txt_feedback.color = "orange"
+            btn_bid_100.disabled = True
+            if page: page.update(txt_feedback, btn_bid_100)
+            return
+
+        game_state["money"] -= bid_amount
+        game_state["main_pot"] += bid_amount
+        game_state["current_bid_amount"] += bid_amount
+
+        target_bonus = (game_state["current_bid_amount"] // 1000) * 50
+        current_bonus = game_state["current_bonus_pot"]
+
+        if target_bonus > current_bonus:
+            bonus_to_add = target_bonus - current_bonus
+            game_state["main_pot"] += bonus_to_add
+            game_state["current_bonus_pot"] = target_bonus
+            update_bonus_display()
+            txt_feedback.value = f"Bank dorzucił {bonus_to_add} zł bonusu!"
+            txt_feedback.color = "blue"
         else:
-            front_x, back_x = int(x + 2), int(x + L - light_len - 2)
-        shapes += [
-            cv.Rect(front_x, off_y1, light_len, light_th, paint=FILL("#ffffff")),
-            cv.Rect(front_x, off_y2, light_len, light_th, paint=FILL("#ffffff")),
-            cv.Rect(back_x, off_y1, light_len, light_th, paint=FILL("#ff3b30")),
-            cv.Rect(back_x, off_y2, light_len, light_th, paint=FILL("#ff3b30")),
-        ]
-        return shapes
+            if txt_feedback.color == "blue":
+                txt_feedback.value = ""
+                txt_feedback.color = "black"
 
-    def redraw_canvas(self):
-        shapes = [
-            # Green zones and road
-            cv.Rect(0, 0, W, GRID * 3, paint=FILL("#2a9d8f")),  # Top green
-            # SCALING FIX: Bottom green now fills from grid 12 to H
-            cv.Rect(0, GRID * 12, W, H - (GRID * 12), paint=FILL("#2a9d8f")),  # Bottom green
-            cv.Rect(0, GRID * 3, W, GRID * 9, paint=FILL("#1e1e1e")),  # Road
-            # Road edge lines
-            cv.Rect(0, GRID * 3, W, 2, paint=FILL("#f1f2f6")),
-            cv.Rect(0, GRID * 12, W, 2, paint=FILL("#f1f2f6")),
-        ]
-        # Lane markings
-        for y in (LANES_Y[1], LANES_Y[2], LANES_Y[3]):
-            # Ensure W and GRID are integers for range()
-            for x in range(0, int(W), int(GRID)):
-                shapes.append(cv.Rect(x, y - 4, GRID // 2, max(2, GRID // 20), paint=FILL("#f1f2f6")))
-        # Cars
-        for c in self.cars: shapes += self._car_shapes(c)
-        # Blood stains
-        for s in self.stains:
-            r = s.t / s.max_t
-            # New logic for scaling and alpha
-            if r < 0.3:  # First 30% time - fast expansion
-                size = 10 + int(90 * (r / 0.3))
-                alpha = 0.9 * (r / 0.3)
-            elif r > 0.7:  # Last 30% time - fast fade out
-                k = (r - 0.7) / 0.3
-                size = max(1, int(100 * (1 - k)))
-                alpha = max(0, 0.9 * (1 - k))
-            else:  # Middle phase - full size, constant alpha
-                size = 100
-                alpha = 0.9
+        update_money_display()
+        update_pot_display()
+        btn_bid_100.text = f"Licytuj +100 zł (Suma: {game_state['current_bid_amount']} zł)"
 
-            if size > 0:
-                shapes.append(cv.Circle(s.x, s.y, size / 2, paint=FILL(ft.Colors.with_opacity(alpha, "#8b0000"))))
+        if game_state["money"] < bid_amount:
+            btn_bid_100.disabled = True
+            txt_feedback.value = "Nie masz więcej pieniędzy na licytację."
+            txt_feedback.color = "orange"
+        elif game_state["current_bid_amount"] >= max_bid:
+            btn_bid_100.disabled = True
+            txt_feedback.value = f"Osiągnięto limit licytacji ({max_bid} zł)."
+            txt_feedback.color = "orange"
 
-        self.canvas.shapes = shapes
-        self.canvas.update()
+        if page:
+            page.update(btn_bid_100, txt_feedback)
 
-    # --- speeds ---
-    def speed_multiplier_for_level(self, lvl: int) -> float:
-        mult, last = self.START_MULT, 1
-        for up, k in self.SPEED_SEGMENTS:
-            if lvl <= last: break
-            take = min(lvl, up) - last
-            if take > 0: mult += (k * self.BASE_STEP) * take
-            last = up
-        if lvl > last: mult += (200 * self.BASE_STEP) * (lvl - last)
-        return mult
+    # --- Główne Funkcje Nawigacji ---
 
-    # --- cars ---
-    def destroy_cars(self):
-        self.cars.clear()
+    def start_bidding_phase(e=None):
+        """Rozpoczyna FAZĘ LICYTACJI. Ukrywa pytanie."""
 
-    def create_cars(self):
-        self.cars.clear()
-        specs = [
-            (LANES_Y[0], 3.0, 3, 2.0 * GRID),
-            (LANES_Y[1], 2.2, 3, 2.5 * GRID),
-            (LANES_Y[2], -2.6, 2, 1.5 * GRID),
-            (LANES_Y[3], -1.8, 4, 2.0 * GRID),
-        ]
-        colors = ["#ef476f", "#ffd166", "#06d6a0", "#118ab2", "#f78c6b", "#9b5de5"]
-        scale = self.speed_multiplier_for_level(self.level)
-        for y, base, count, L in specs:
+        stake = game_state["base_stake"]
 
-            # GAMEPLAY FIX: Reduce car count in portrait mode
-            base_count = count
-            responsive_count = base_count
-            if W < H:  # Portrait mode
-                responsive_count = max(1, int(base_count * 0.7))  # 30% reduction
-
-            spd, dir_right = base * scale, base * scale > 0
-            edge = (-L - random.randint(50, 200)) if dir_right else (W + random.randint(50, 200))
-
-            # Use responsive_count instead of count
-            pos = [edge - i * (L + MIN_GAP) if dir_right else edge + i * (L + MIN_GAP) for i in range(responsive_count)]
-
-            for x in pos:
-                self.cars.append(Car(y, spd, L, random.choice(colors), x))
-        self.redraw_canvas()
-
-    # --- HUD / banners ---
-    def _kmh(self, lvl: int) -> float:
-        return 5.0 * lvl
-
-    def update_hud(self):
-        cur, nxt = self.speed_multiplier_for_level(self.level), self.speed_multiplier_for_level(
-            min(self.level + 1, MAX_LEVEL))
-        self.txt_level.value = f"LVL: {self.level}/{MAX_LEVEL}"
-
-        # UI FIX: Update the two new text lines for speed
-        self.txt_speed_line1.value = f"Speed x{cur:.2f} → x{nxt:.2f}"
-        self.txt_speed_line2.value = f"{self._kmh(self.level):.0f}→{self._kmh(min(self.level + 1, MAX_LEVEL)):.0f} km/h"
-
-        self.txt_score.value = f"SCORE: {self.score}"
-        blink = (self.tick // 6) % 2 == 0
-
-        # UI FIX: Reduced heart size to be more responsive
-        self.hearts_row.controls = [
-            ft.Text(("❤" if (i < self.lives and not (self.lives == 1 and i == 0 and not blink)) else "♡"),
-                    color=(HEART_RED if i < self.lives else HEART_WHITE), size=max(14, int(GRID * 0.45)))
-            # Było 18, 0.55
-            for i in range(4)
-        ]
-        self.btn_restart_cp.visible = self.game_over
-
-        # Update HUD and restart button
-        self.hud.update()
-        self.btn_restart_cont.update()
-
-    def show_level_banner(self):
-        self.level_banner.value = f"LEVEL {self.level}"
-        self.level_banner_cont.visible = True
-        self.banner_ticks = 0
-        self.level_banner_cont.update()
-
-    # --- player & input ---
-    def reset_player(self):
-        self.player.left, self.player.top = START_X, START_Y
-        self.player.width = PLAYER_SIZE;
-        self.player.height = PLAYER_SIZE
-        self.player_img.width = PLAYER_SIZE;
-        self.player_img.height = PLAYER_SIZE
-        self.player.data = {"alive": True};
-        self.player.update()
-        self.player_img.src = self.SPRITES["START"];
-        self.player_img.update()
-        self.current_dir = "front";
-        self.move_anim_until = 0
-        self.last_move_tick = self.tick
-
-    async def move_player(self, dx, dy):
-        if not self.player.data.get("alive", True): return
-        old_left, old_top = self.player.left, self.player.top
-        self.player.left = max(0, min(W - PLAYER_SIZE, (self.player.left or 0) + dx * GRID))
-        self.player.top = max(0, min(H - PLAYER_SIZE, (self.player.top or 0) + dy * GRID))
-        self.player.update()
-        moved = (self.player.left != old_left or self.player.top != old_top)
-        if moved:
-            # AUDIO FIX: Call the sfx player
-            self._play_sfx("step")
-            if dx > 0:
-                self.current_dir = "right"
-            elif dx < 0:
-                self.current_dir = "left"
-            elif dy < 0:
-                self.current_dir = "front"
-            elif dy > 0:
-                self.current_dir = "back"
-            self.move_anim_until = self.tick + 6
-            self.last_move_tick = self.tick
-
-    def _anim_update(self):
-        if self.tick < self.honk_until:
-            if self.player_img.src != self.SPRITES["FUCK"]:
-                self.player_img.src = self.SPRITES["FUCK"];
-                self.player_img.update()
+        if check_game_over(stake, f"Nie masz wystarczająco pieniędzy ({stake} zł), aby rozpocząć! Koniec gry."):
             return
 
-        idle_ticks = self.tick - self.last_move_tick
-        if idle_ticks >= IDLE_RANDOM_AFTER:
-            if (self.anim_tick_acc % ANIM_DT_TICKS) == 0:
-                self.player_img.src = random.choice(self.ALL_SPRITES_FOR_IDLE)
-                self.player_img.update()
-            self.anim_tick_acc += 1
+        game_state["money"] -= stake
+        game_state["main_pot"] += stake
+        game_state["current_bid_amount"] = 0
+        game_state["current_bonus_pot"] = 0
+        update_money_display()
+        update_pot_display()
+        update_bonus_display()
+
+        txt_feedback.value = f"Stawka {stake} zł dodana do puli. Licytuj!"
+        txt_feedback.color = "black"
+
+        txt_question.visible = False  # KLUCZOWA ZMIANA
+        answer_ui_container.visible = False
+        btn_next.visible = False
+        btn_back_to_menu.visible = False
+        btn_hint_5050.disabled = True
+        btn_buy_abcd.disabled = True
+
+        bidding_container.visible = True
+        txt_bonus_pot.visible = True
+        btn_bid_100.disabled = False
+        btn_bid_100.text = "Licytuj +100 zł (Suma: 0 zł)"
+        btn_start_answering.disabled = False
+
+        btn_bid_100.on_click = bid_100
+        btn_start_answering.on_click = start_answering_and_load_question
+
+        if page:
+            page.update(
+                txt_question, answer_ui_container, txt_feedback, btn_hint_5050,
+                btn_buy_abcd, btn_next, bidding_container, txt_bonus_pot, btn_back_to_menu
+            )
+
+    def reset_game_state():
+        """Resetuje stan kasy i puli, ale NIE wczytuje pytań."""
+        game_state["money"] = 10000
+        game_state["current_question_index"] = -1
+        game_state["main_pot"] = 0
+        game_state["money_spent_on_hints"] = 0
+        game_state["current_bid_amount"] = 0
+        game_state["current_bonus_pot"] = 0
+
+        update_money_display()
+        update_pot_display()
+        update_spent_display()
+        update_bonus_display()
+
+        if hasattr(page, 'dialog') and page.dialog:
+            page.dialog.open = False
+
+        txt_question.value = "Wciśnij 'Start', aby rozpocząć grę!"
+        txt_question.visible = True
+        txt_feedback.value = "Witaj w grze!"
+        txt_feedback.color = "blue_700"
+
+        bidding_container.visible = False
+        answer_ui_container.visible = False
+        btn_next.visible = False
+        btn_back_to_menu.visible = False
+        btn_hint_5050.disabled = True
+        btn_buy_abcd.disabled = True
+
+        if page:
+            page.update(
+                btn_next, txt_question, txt_feedback,
+                bidding_container, answer_ui_container, btn_hint_5050,
+                btn_buy_abcd, btn_back_to_menu
+            )
+
+    def go_to_main_menu(e):
+        """Pokazuje menu główne, ukrywa widok gry."""
+        game_view.visible = False
+        main_menu_view.visible = True
+
+        if hasattr(page, 'dialog') and page.dialog:
+            page.dialog.open = False
+
+        if page:
+            page.update(game_view, main_menu_view, page.dialog)
+
+    def restart_current_set(e):
+        """Resetuje stan gry i zaczyna ten sam zestaw od nowa."""
+        if hasattr(page, 'dialog') and page.dialog:
+            page.dialog.open = False
+        reset_game_state()
+        start_bidding_phase()
+        if page:
+            page.update()
+
+    def start_game_session(e, set_filename: str):
+        """
+        Główna funkcja wczytująca zestaw pytań i przełączająca widok.
+        """
+        loaded_questions = parse_question_file(set_filename)
+
+        if not loaded_questions:
+            # Usunięto print
             return
 
-        if self.tick < self.move_anim_until:
-            if (self.anim_tick_acc % ANIM_DT_TICKS) == 0:
-                if self.current_dir == "front":
-                    self.player_img.src = self.SPRITES["STEP_FRONT"][self.step_front_idx]
-                    self.player_img.update();
-                    self.step_front_idx = (self.step_front_idx + 1) % 3
-                elif self.current_dir == "back":
-                    self.player_img.src = self.SPRITES["STEP_BACK"] if self.back_toggle else self.SPRITES["LOOK_BACK"]
-                    self.player_img.update();
-                    self.back_toggle = not self.back_toggle
-                elif self.current_dir == "left":
-                    seq = [self.SPRITES["LOOK_LEFT"]] + self.SPRITES["STEP_FRONT"]
-                    self.player_img.src = seq[self.left_cycle_idx % len(seq)]
-                    self.player_img.update();
-                    self.left_cycle_idx += 1
-                elif self.current_dir == "right":
-                    seq = [self.SPRITES["LOOK_RIGHT"]] + self.SPRITES["STEP_FRONT"]
-                    self.player_img.src = seq[self.right_cycle_idx % len(seq)]
-                    self.player_img.update();
-                    self.right_cycle_idx += 1
-            self.anim_tick_acc += 1
-            return
+        game_state["active_question_set"] = loaded_questions
+        game_state["total_questions"] = len(loaded_questions)
+        game_state["set_name"] = set_filename.replace(".txt", "")
 
-        if self.player_img.src != self.SPRITES["START"]:
-            self.player_img.src = self.SPRITES["START"];
-            self.player_img.update()
+        reset_game_state()
 
-    def on_key(self, e: ft.KeyboardEvent):
-        m = {"ArrowRight": (1, 0), "d": (1, 0), "D": (1, 0),
-             "ArrowLeft": (-1, 0), "a": (-1, 0), "A": (-1, 0),
-             "ArrowUp": (0, -1), "w": (0, -1), "W": (0, -1),
-             "ArrowDown": (0, 1), "s": (0, 1), "S": (0, 1)}
-        if e.key == " " and self.game_over:
-            self.restart_from_checkpoint();
-            return
-        if e.key in ("m", "M"):
-            self.toggle_mute();
-            return
-        dxdy = m.get(e.key)
-        if dxdy: self.p.run_task(self.move_player, *dxdy)
+        main_menu_view.visible = False
+        game_view.visible = True
 
-    # --- game events ---
-    def player_die(self):
-        if not self.player.data.get("alive", True): return
-        self._play_sfx("hit")
-        self.player.data["alive"] = False;
-        self.lives -= 1
-        self.stains.append(
-            BloodStain((self.player.left or 0) + PLAYER_SIZE / 2, (self.player.top or 0) + PLAYER_SIZE / 2))
-        self.death_msg.value = random.choice(
-            ["AW, MAN!", "WHAT A NOOB!", "OMG YOU ROOKIE!", "NICE GOING, GOOFBALL", "ROAD HUGGER!", "SPLAT!"])
+        start_bidding_phase()
 
-        self.death_msg_cont.visible = True
-        self.death_msg_cont.update()
+        if page:
+            page.update(main_menu_view, game_view)
 
-        if self.lives <= 0 and not self.game_over:
-            self.game_over = True
-            self.center_prompt.value = "GAME OVER — Space / Restart (checkpoint)"
-            self.center_prompt_cont.visible = True
-            self.center_prompt_cont.update()
-        self.update_hud()
+    # --- Układ Strony (Layout) ---
+    btn_back_to_menu.on_click = go_to_main_menu
+    btn_next.on_click = start_bidding_phase
 
-    def level_complete(self):
-        self._play_sfx("level")
-        prev = self.level;
-        self.score += self.level * 100;
-        self.level = min(MAX_LEVEL, self.level + 1)
-        if prev % 10 == 0: self.checkpoint_level, self.checkpoint_score = self.level, self.score
+    page.add(
+        main_menu_view,
+        game_view
+    )
 
-        self.center_prompt.value = f"LEVEL UP! → {self.level}"
-        self.center_prompt_cont.visible = True;
-        self.center_prompt_cont.update()
-
-        self.show_level_banner()
-        self.reset_player();
-        self.destroy_cars();
-        self.create_cars();
-        self.update_hud()
-
-    def restart_from_checkpoint(self):
-        self.level, self.score, self.lives, self.game_over = self.checkpoint_level, self.checkpoint_score, 4, False
-        self.death_msg_cont.visible = self.center_prompt_cont.visible = False
-        self.destroy_cars();
-        self.stains.clear()
-
-        # AUDIO FIX: Restart BGM
-        try:
-            self.bgm.play()
-        except Exception as e:
-            print(f"Error restarting BGM: {e}")
-
-        self.reset_player();
-        self.create_cars();
-        self.update_hud()
-        self.show_level_banner()
-        self.redraw_canvas()
-
-    def exit_game(self):
-        ok = False
-        for attr in ("window_close", "window_destroy"):
-            try:
-                if hasattr(self.p, attr):
-                    getattr(self.p, attr)();
-                    ok = True;
-                    break
-            except Exception:
-                pass
-        if not ok:
-            # Show a message if window can't be closed (e.g., in web or mobile)
-            self.center_prompt.value = "Cannot close window. Please close the tab/app manually."
-            self.center_prompt_cont.visible = True
-            self.center_prompt_cont.update()
-
-    # --- spacing enforcement ---
-    def _enforce_spacing(self):
-        lanes = defaultdict(list)
-        for c in self.cars: lanes[(c.y, 1 if c.speed > 0 else -1)].append(c)
-        for (y, d), Ls in lanes.items():
-            Ls.sort(key=lambda c: c.x, reverse=(d < 0))
-            for i in range(1, len(Ls)):
-                a, b = Ls[i - 1], Ls[i]
-                if d > 0:
-                    need = a.x + a.length + MIN_GAP
-                    if b.x < need: b.x = need
-                else:
-                    need = a.x - b.length - MIN_GAP
-                    if b.x > need: b.x = need
-
-    # --- main loop ---
-    async def loop(self):
-        level_up_cooldown = 0
-        while True:
-            self.tick += 1
-
-            # Update stains and fade out messages
-            for s in self.stains: s.step()
-            self.stains = [s for s in self.stains if s.alive()]
-
-            if self.death_msg_cont.visible and self.tick % 40 == 0:
-                self.death_msg_cont.visible = False;
-                self.death_msg_cont.update()
-
-            if self.center_prompt_cont.visible and level_up_cooldown > 20:
-                self.center_prompt_cont.visible = False;
-                self.center_prompt_cont.update()
-
-            if self.level_banner_cont.visible:
-                self.banner_ticks += 1
-                if self.banner_ticks > 60:
-                    self.level_banner_cont.visible = False;
-                    self.level_banner_cont.update()
-
-            if not self.game_over:
-                for car in self.cars:
-                    car.x += car.speed
-                    # Car wrapping logic
-                    if car.speed > 0 and car.x > W: car.x = -car.length - random.randint(50, 200)
-                    if car.speed < 0 and car.x + car.length < 0: car.x = W + random.randint(50, 200)
-
-                    # Honking logic
-                    if car.honk_timer > 0: car.honk_timer -= 1
-                    if self.player.data.get("alive", True) and car.honk_timer == 0 and car.is_near(
-                            self.player.left or 0, self.player.top or 0):
-                        # AUDIO FIX: Call the sfx player
-                        self._play_sfx("honk")
-                        car.honk_timer = 18
-                        self.honk_until = self.tick + HONK_REACT_TICKS
-
-                    # Collision logic
-                    if self.player.data.get("alive", True) and car.collides(self.player.left or 0,
-                                                                            self.player.top or 0):
-                        self.player_die()
-
-                self._enforce_spacing()
-
-                # Respawn logic
-                if not self.player.data.get("alive", True) and self.tick % 30 == 0 and self.lives > 0:
-                    self.reset_player()
-                # Level up logic
-                if self.player.data.get("alive", True) and (self.player.top or 0) <= GRID * 3:
-                    self.level_complete();
-                    level_up_cooldown = 0
-
-            self._anim_update()
-
-            self.redraw_canvas()
-            self.update_hud()
-            level_up_cooldown += 1
-            await asyncio.sleep(FPS_SLEEP)
+    if page:
+        page.update()
 
 
-# --- run ---
-async def main(page: ft.Page):
-    page.bgcolor = "#0d1117"
-    game = GonzoGame(page)
-    page.run_task(game.loop)
-
-
+# Uruchomienie aplikacji Flet
 if __name__ == "__main__":
-    ft.app(target=main, assets_dir="assets")
-
+    ft.app(target=main)
