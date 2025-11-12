@@ -50,10 +50,13 @@ jobs:
       run: |
         echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}, USER: ${GITHUB_REPOSITORY%/*}, PROJECT_BASE_URL: ${GITHUB_REPOSITORY#*/}"
         
-        # POPRAWKA: Usunęliśmy 'gra.py'. 
-        # Flet automatycznie znajdzie 'main.py' (który ma 'assets_dir="assets"')
-        # Dodaliśmy też '--clear-cache' z Twojej sugestii .apk
-        flet build web --clear-cache --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
+        # --- POPRAWKA JEST TUTAJ ---
+        # Dodaliśmy ukośniki / na początku i na końcu zmiennej base-url.
+        # To jest kluczowe, aby Flet poprawnie budował ścieżki do zasobów (assets).
+        # Z: --base-url ${GITHUB_REPOSITORY#*/}
+        # DO: --base-url /${GITHUB_REPOSITORY#*/}/
+        
+        flet build web --clear-cache --base-url /${GITHUB_REPOSITORY#*/}/ --route-url-strategy hash
 
     - name: Upload Artifact
       uses: actions/upload-pages-artifact@v3
