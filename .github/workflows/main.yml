@@ -44,15 +44,17 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        # POPRAWKA: Zostawiamy instalację flet-cli, to jest kluczowe
+        # Instalacja flet-cli jest kluczowa, zostaje
         pip install --upgrade flet flet-cli
     
     - name: Flet Build Web
       run: |
           echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}, USER: ${GITHUB_REPOSITORY%/*}, PROJECT_BASE_URL: ${GITHUB_REPOSITORY#*/}"
-          # POPRAWKA: Przenosimy flagę '--assets-dir' na początek i używamy poprawnej nazwy flagi
-          # Zamiast '--assets assets', poprawna flaga to '--assets-dir assets'
-          flet build web --assets-dir assets --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
+          
+          # POPRAWKA: Usunęliśmy błędną flagę '--assets-dir assets'.
+          # Flet sam odczyta 'assets_dir' z pliku gra.py
+          # POPRAWKA 2: Dodajemy --clear-cache (zgodnie z Twoją sugestią)
+          flet build web --clear-cache --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
 
     - name: Upload Artifact
       uses: actions/upload-pages-artifact@v3
