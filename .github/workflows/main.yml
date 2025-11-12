@@ -44,15 +44,15 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        # POPRAWKA: Dodajemy instalację flet-cli, tak jak w działającym pliku .apk.yml
+        # POPRAWKA: Zostawiamy instalację flet-cli, to jest kluczowe
         pip install --upgrade flet flet-cli
     
     - name: Flet Build Web
       run: |
           echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY}, USER: ${GITHUB_REPOSITORY%/*}, PROJECT_BASE_URL: ${GITHUB_REPOSITORY#*/}"
-          # POPRAWKA: Ponownie dodajemy flagę --assets assets.
-          # Teraz, gdy mamy flet-cli, powinna zostać poprawnie rozpoznana.
-          flet build web --assets assets --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
+          # POPRAWKA: Usunięto błędny argument '--assets assets'.
+          # Flet-cli powinien teraz automatycznie wykryć folder 'assets'.
+          flet build web --base-url ${GITHUB_REPOSITORY#*/} --route-url-strategy hash
 
     - name: Upload Artifact
       uses: actions/upload-pages-artifact@v3
