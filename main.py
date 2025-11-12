@@ -9,9 +9,6 @@ from thefuzz import fuzz
 # --- STAŁA: Folder z zasobami ---
 ASSETS_DIR = "assets"
 
-
-# --------------------
-
 def parse_question_file(filename: str) -> list:
     """
     Wczytuje plik .txt z folderu ASSETS_DIR i parsuje go do formatu listy pytań.
@@ -906,3 +903,4 @@ def main(page: ft.Page):
 # Uruchomienie aplikacji Flet
 if __name__ == "__main__":
     ft.app(target=main)
+
