@@ -15,21 +15,18 @@ ASSETS_DIR = "assets"
 def parse_question_file(page: ft.Page, filename: str) -> list:
     """
     Wczytuje plik .txt z folderu ASSETS_DIR i parsuje go do formatu listy pytań.
-    Używa page.open_asset() dla trybu web/apk lub open() dla trybu lokalnego.
+    
+    POPRAWKA: Zawsze używa page.open_asset(), ponieważ 'assets_dir' jest 
+    zdefiniowany globalnie w ft.app()
     """
     parsed_questions = []
     filepath = os.path.join(ASSETS_DIR, filename)
 
     try:
-        # POPRAWKA: Logika 'if page.web' decyduje, jak czytać plik
-        if page.web:
-            # Tryb Web/APK: Użyj wbudowanej funkcji Flet do pobierania zasobów
-            with page.open_asset(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
-        else:
-            # Tryb Lokalny: Użyj standardowego otwierania plików Pythona
-            with open(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
+        # POPRAWKA: Usunęliśmy logikę 'if page.web:'. 
+        # page.open_asset() działa teraz wszędzie.
+        with page.open_asset(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
 
     except Exception as e:
         # Nie udało się otworzyć pliku (np. nie istnieje)
@@ -335,19 +332,20 @@ def main(page: ft.Page):
     )
 
     # --- WIDOK 2: EKRAN GŁÓWNY (MENU) ---
-
+    
     # POPRAWKA: Nowy element do wyświetlania błędów w menu
     main_menu_feedback = ft.Text(
-        value="",
-        color="red",
-        visible=False,
+        value="", 
+        color="red", 
+        visible=False, 
         text_align=ft.TextAlign.CENTER
     )
 
     menu_tiles_standard = []
     for i in range(1, 31):
         filename = f"{i:02d}.txt"
-
+        
+        # POPRAWKA: Usunęliśmy 'check_file_exists'
         menu_tiles_standard.append(
             ft.Button(
                 content=ft.Text(value=f"{i:02d}", size=12),
@@ -355,9 +353,9 @@ def main(page: ft.Page):
                 width=35,
                 height=35,
                 on_click=lambda e, f=filename: start_game_session(e, f),
-                disabled=False,  # POPRAWKA: Zawsze aktywne
+                disabled=False, # Zawsze aktywne
                 style=ft.ButtonStyle(
-                    bgcolor="blue_grey_50"  # POPRAWKA: Jeden kolor
+                    bgcolor="blue_grey_50" 
                 )
             )
         )
@@ -373,9 +371,9 @@ def main(page: ft.Page):
                 width=35,
                 height=35,
                 on_click=lambda e, f=filename: start_game_session(e, f),
-                disabled=False,  # POPRAWKA: Zawsze aktywne
+                disabled=False, # Zawsze aktywne
                 style=ft.ButtonStyle(
-                    bgcolor="deep_purple_50"  # POPRAWKA: Jeden kolor
+                    bgcolor="deep_purple_50" 
                 )
             )
         )
@@ -391,9 +389,9 @@ def main(page: ft.Page):
                 width=35,
                 height=35,
                 on_click=lambda e, f=filename: start_game_session(e, f),
-                disabled=False,  # POPRAWKA: Zawsze aktywne
+                disabled=False, # Zawsze aktywne
                 style=ft.ButtonStyle(
-                    bgcolor="amber_50"  # POPRAWKA: Jeden kolor
+                    bgcolor="amber_50"
                 )
             )
         )
@@ -402,7 +400,7 @@ def main(page: ft.Page):
         [
             ft.Text("Wybierz zestaw pytań:", size=24, weight=ft.FontWeight.BOLD),
             ft.Text(f"Pliki pytań muszą znajdować się w folderze '{ASSETS_DIR}'."),
-            main_menu_feedback,  # POPRAWKA: Dodany element na błędy
+            main_menu_feedback, # Dodany element na błędy
             ft.Divider(height=20),
             ft.Row(menu_tiles_standard[0:10], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
             ft.Row(menu_tiles_standard[10:20], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
@@ -863,7 +861,7 @@ def main(page: ft.Page):
         """Pokazuje menu główne, ukrywa widok gry."""
         game_view.visible = False
         main_menu_view.visible = True
-        main_menu_feedback.visible = False  # Ukryj błąd przy powrocie
+        main_menu_feedback.visible = False # Ukryj błąd przy powrocie
 
         if hasattr(page, 'dialog') and page.dialog:
             page.dialog.open = False
@@ -885,14 +883,14 @@ def main(page: ft.Page):
         Główna funkcja wczytująca zestaw pytań i przełączająca widok.
         """
         # POPRAWKA: Przekazujemy 'page' do parsera
-        loaded_questions = parse_question_file(page, set_filename)
+        loaded_questions = parse_question_file(page, set_filename) 
 
         # POPRAWKA: Logika obsługi błędów
         if not loaded_questions:
             main_menu_feedback.value = f"Błąd: Nie można wczytać pliku '{set_filename}'. Sprawdź, czy plik istnieje w 'assets' i ma poprawny format."
             main_menu_feedback.visible = True
             if page: page.update(main_menu_feedback)
-            return  # Zostajemy w menu
+            return # Zostajemy w menu
 
         game_state["active_question_set"] = loaded_questions
         game_state["total_questions"] = len(loaded_questions)
@@ -901,7 +899,7 @@ def main(page: ft.Page):
         reset_game_state()
 
         main_menu_view.visible = False
-        main_menu_feedback.visible = False  # Ukryj błąd po udanym wczytaniu
+        main_menu_feedback.visible = False # Ukryj błąd po udanym wczytaniu
         game_view.visible = True
 
         start_bidding_phase()
@@ -924,4 +922,5 @@ def main(page: ft.Page):
 
 # Uruchomienie aplikacji Flet
 if __name__ == "__main__":
-    ft.app(target=main)
+    # POPRAWKA: Dodajemy 'assets_dir' - to jest klucz do sukcesu!
+    ft.app(target=main, assets_dir=ASSETS_DIR)
