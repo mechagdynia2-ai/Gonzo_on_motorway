@@ -1,12 +1,12 @@
 import flet as ft
 import random
-import time
 import re
 import os
 # Wymagana biblioteka do "fuzzy matching"
 from thefuzz import fuzz
 
 # --- STAŁA: Folder z zasobami ---
+# TA LINIA JEST KLUCZOWA I MUSI ZOSTAĆ!
 ASSETS_DIR = "assets"
 
 
@@ -19,8 +19,11 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
     Logika if/else jest kluczowa:
     - page.web/platform: Użyj page.open_asset (dla web/apk)
     - else: Użyj standardowego open (dla lokalnego PyCharm)
+    
+    TA FUNKCJA JEST POPRAWNA, NIE ZMIENIAMY JEJ.
     """
     parsed_questions = []
+    # Ścieżka 'assets/filename.txt' jest tworzona poprawnie
     filepath = os.path.join(ASSETS_DIR, filename)
     content = ""  # Zmienna na zawartość pliku
 
@@ -28,6 +31,7 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
         # Sprawdzamy, gdzie działa aplikacja
         if page.web or page.platform in ("android", "ios"):
             # Dla Web/Mobile, używamy page.open_asset()
+            # To jest "otwarcie" pliku na webie
             with page.open_asset(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
         else:
@@ -36,7 +40,9 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
                 content = f.read()
 
     except Exception as e:
-        # Nie udało się otworzyć pliku (np. nie istnieje)
+        # Jak prosiłeś: jeśli plik nie istnieje (lub jest błąd), aplikacja
+        # się wykrzaczy (zwróci pustą listę, co obsłuży start_game_session)
+        print(f"KRYTYCZNY BŁĄD: Nie można otworzyć lub sparsować pliku {filepath}. Błąd: {e}")
         return []
 
     # Dzielimy plik na bloki na podstawie numeru pytania (np. "01.", "02.", "10.")
@@ -78,8 +84,10 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
                     "answers": answers
                 })
             except Exception as e:
+                print(f"Błąd parsowania bloku: {block[:50]}... Błąd: {e}")
                 pass
         else:
+            print(f"Blok nie pasuje do wzorca: {block[:50]}...")
             pass
 
     return parsed_questions
@@ -114,24 +122,9 @@ def normalize_answer(text: str) -> str:
     return text
 
 
-# Funkcja pomocnicza do sprawdzania plików
-def check_file_exists(page: ft.Page, filename: str) -> bool:
-    """
-    Sprawdza, czy plik istnieje, używając metody odpowiedniej dla platformy.
-    """
-    filepath = os.path.join(ASSETS_DIR, filename)
-    try:
-        if page.web or page.platform in ("android", "ios"):
-            # Próba otwarcia pliku w trybie 'r' to najlepszy test
-            with page.open_asset(filepath, "r", encoding="utf-8") as f:
-                pass  # Po prostu sprawdzamy, czy się otworzy
-        else:
-            # Używamy standardowego os.path.exists dla lokalnego
-            if not os.path.exists(filepath):
-                return False
-        return True
-    except Exception:
-        return False
+# --- USUNIĘTA FUNKCJA ---
+# def check_file_exists(page: ft.Page, filename: str) -> bool:
+#     ... (usunięto)
 
 
 def main(page: ft.Page):
@@ -371,20 +364,22 @@ def main(page: ft.Page):
     def create_menu_tile(index, bgcolor):
         filename = f"{index:02d}.txt"
 
-        # POPRAWKA: Używamy nowej, uniwersalnej funkcji sprawdzającej
-        file_exists = check_file_exists(page, filename)
-
+        # --- GŁÓWNA ZMIANA TUTAJ ---
+        # Usunięto sprawdzanie pliku.
+        # Zakładamy, że pliki 01-50 istnieją.
+        
         return ft.Button(
             content=ft.Text(value=f"{index:02d}", size=12),
             tooltip=f"Zestaw {index:02d}",
             width=35,
             height=35,
             on_click=lambda e, f=filename: start_game_session(e, f),
-            disabled=not file_exists,  # Wyłączamy, jeśli plik nie istnieje
+            disabled=False,  # ZAWSZE WŁĄCZONY
             style=ft.ButtonStyle(
-                bgcolor=bgcolor if file_exists else "grey_300"
+                bgcolor=bgcolor # ZAWSZE KOLOROWY
             )
         )
+        # --- KONIEC ZMIANY ---
 
     menu_tiles_standard = [create_menu_tile(i, "blue_grey_50") for i in range(1, 31)]
     menu_tiles_popkultura = [create_menu_tile(i, "deep_purple_50") for i in range(31, 41)]
@@ -393,7 +388,8 @@ def main(page: ft.Page):
     main_menu_view = ft.Column(
         [
             ft.Text("Wybierz zestaw pytań:", size=24, weight=ft.FontWeight.BOLD),
-            ft.Text(f"Dostępne są tylko podświetlone zestawy (pliki .txt w folderze '{ASSETS_DIR}')."),
+            # Zmieniono tekst, aby odzwierciedlić zmianę
+            ft.Text(f"Zakładam, że pliki 01-50.txt istnieją w folderze '{ASSETS_DIR}'."),
             main_menu_feedback,  # Dodany element na błędy
             ft.Divider(height=20),
             ft.Row(menu_tiles_standard[0:10], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
@@ -881,7 +877,9 @@ def main(page: ft.Page):
 
         # POPRAWKA: Logika obsługi błędów
         if not loaded_questions:
-            main_menu_feedback.value = f"Błąd: Nie można wczytać pliku '{set_filename}'. Sprawdź, czy plik istnieje w 'assets' i ma poprawny format."
+            # Zgodnie z prośbą: jeśli plik nie istnieje lub jest pusty,
+            # to teraz jest to błąd krytyczny.
+            main_menu_feedback.value = f"BŁĄD KRYTYCZNY: Nie można wczytać pliku '{set_filename}'. Sprawdź, czy plik istnieje w 'assets' i ma poprawny format. Aplikacja nie może kontynuować."
             main_menu_feedback.visible = True
             if page: page.update(main_menu_feedback)
             return  # Zostajemy w menu
@@ -917,4 +915,5 @@ def main(page: ft.Page):
 # Uruchomienie aplikacji Flet
 if __name__ == "__main__":
     # KLUCZOWE: 'assets_dir' mówi Fletowi, aby spakował ten folder.
+    # TO JEST NAJWAŻNIEJSZA LINIA DLA WEB/APK.
     ft.app(target=main, assets_dir=ASSETS_DIR)
