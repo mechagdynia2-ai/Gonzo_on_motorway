@@ -16,40 +16,48 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
     """
     Wczytuje plik .txt z folderu ASSETS_DIR i parsuje go do formatu listy pytań.
 
-    Logika if/else jest kluczowa:
-    - page.platform (android/ios): Użyj page.open_asset (dla apk)
-    - else (web/desktop): Użyj standardowego open
-    
-    TA FUNKCJA JEST POPRAWIONA, ZMIENIONO LOGIKĘ IF/ELSE.
+    TA FUNKCJA JEST OSTATECZNIE POPRAWIONA - ROZRÓŻNIA PC, WEB I MOBILE.
     """
     parsed_questions = []
-    # Ścieżka 'assets/filename.txt' jest tworzona poprawnie
-    filepath = os.path.join(ASSETS_DIR, filename)
-    content = ""  # Zmienna na zawartość pliku
+    filepath = ""  # Zmienna do śledzenia, którą ścieżkę próbowaliśmy otworzyć
+    content = ""
 
     try:
         # Sprawdzamy, gdzie działa aplikacja
         
-        # --- KLUCZOWA ZMIANA TUTAJ ---
-        # Usunęliśmy 'page.web' z tego warunku.
-        # Błąd "'Page' object has no attribute 'open_asset'" dowiódł,
-        # że na webie ta metoda nie istnieje.
+        # --- OSTATECZNA LOGIKA PLIKÓW ---
         if page.platform in ("android", "ios"):
-            # Dla Mobile (APK), używamy page.open_asset()
+            # 1. Logika dla Mobile (APK) - używa page.open_asset
+            filepath = os.path.join(ASSETS_DIR, filename) # "assets/13.txt"
+            print(f"Mobile: Trying page.open_asset() on: {filepath}")
             with page.open_asset(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
-        else:
-            # Dla lokalnego (PyCharm) ORAZ dla Web
-            # Liczymy, że Pyodide na webie poprawnie obsłuży 'open()'
-            # dla plików, które są obok (dzięki 'assets_dir' w buildzie)
+        
+        elif page.web:
+            # 2. Logika dla Web (GitHub Pages)
+            # Błąd "Errno 44" i inspekcja artefaktu dowiodły, 
+            # że pliki są w roocie (/), a nie w /assets/
+            
+            # --- ZMIANA NA ŻYCZENIE (na podstawie inspekcji artefaktu) ---
+            # Usuwamy ASSETS_DIR ze ścieżki, aby celować w root.
+            filepath = f"/{filename}" # np. "/13.txt"
+            print(f"Web: Trying open() on absolute ROOT path: {filepath}")
+            # --- KONIEC ZMIANY ---
+
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
-        # --- KONIEC ZMIANY ---
+
+        else:
+            # 3. Logika dla PC (PyCharm) - domyślna
+            filepath = os.path.join(ASSETS_DIR, filename) # "assets/13.txt"
+            print(f"Desktop: Trying open() on relative path: {filepath}")
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+        # --- KONIEC OSTATECZNEJ LOGIKI ---
 
     except Exception as e:
-        # Jak prosiłeś: jeśli plik nie istnieje (lub jest błąd), aplikacja
-        # się wykrzaczy (zwróci pustą listę, co obsłuży start_game_session)
-        print(f"KRYTYCZNY BŁĄD: Nie można otworzyć lub sparsować pliku {filepath}. Błąd: {e}")
+        # Zostawiamy jeden, uniwersalny blok błędu, który pokaże nam ścieżkę
+        print(f"KRYTYCZNY BŁĄD: Nie można otworzyć pliku {filepath}. Platforma: {page.platform}, Web: {page.web}. Błąd: {e}")
         return []
 
     # Dzielimy plik na bloki na podstawie numeru pytania (np. "01.", "02.", "10.")
