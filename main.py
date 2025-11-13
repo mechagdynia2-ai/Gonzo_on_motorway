@@ -354,8 +354,6 @@ def main(page: ft.Page):
 
             ft.Container(
                 content=txt_question,
-                alignment=ftim=ft.Container(
-                content=txt_question,
                 alignment=ft.alignment.center,
                 padding=ft.padding.only(left=20, right=20, top=10, bottom=10),
                 height=100
