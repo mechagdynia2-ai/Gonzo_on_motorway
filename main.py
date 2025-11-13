@@ -945,4 +945,5 @@ def main(page: ft.Page):
 if __name__ == "__main__":
     # KLUCZOWE: 'assets_dir' mówi Fletowi, aby spakował ten folder.
     # TO JEST NAJWAŻNIEJSZA LINIA DLA WEB/APK.
-    ft.app(target=main, assets_dir=ASSETS_DIR)
+    ft.app(target=main, assets_dir=".")
+
