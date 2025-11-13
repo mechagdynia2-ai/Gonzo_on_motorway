@@ -6,7 +6,6 @@ import os
 from thefuzz import fuzz
 
 # --- STAŁA: Folder z zasobami ---
-# TA LINIA JEST KLUCZOWA I MUSI ZOSTAĆ!
 ASSETS_DIR = "assets"
 
 
@@ -14,72 +13,82 @@ ASSETS_DIR = "assets"
 
 def parse_question_file(page: ft.Page, filename: str) -> list:
     """
-    Wczytuje plik .txt i parsuje go do formatu listy pytań.
+    Wczytuje plik .txt z folderu ASSETS_DIR i parsuje go do formatu listy pytań.
 
-    NOWA, "OGÓLNA" LOGIKA:
-    Próbuje odczytać plik z 'assets/'. Jeśli się nie uda, próbuje odczytać
-    z katalogu głównego ('/'). Działa to dla PC, Web i Mobile.
+    Implementuje "ogólną logikę" próbującą dwóch ścieżek:
+    1. Oficjalnej (w folderze /assets)
+    2. Awaryjnej (w folderze głównym /)
     """
     parsed_questions = []
-    filepath = ""  # Zmienna do śledzenia, którą ścieżkę próbowaliśmy otworzyć
     content = ""
 
+    # Ścieżka 1: Poprawna ścieżka do zasobów (w folderze assets)
+    path1 = os.path.join(ASSETS_DIR, filename)
+
+    # Ścieżka 2: Ścieżka awaryjna (plik w katalogu głównym)
+    path2 = filename
+
     try:
-        # Sprawdzamy, gdzie działa aplikacja
-        
-        # --- OSTATECZNA "OGÓLNA" LOGIKA ---
         if page.platform in ("android", "ios"):
-            # --- Logika dla Mobile (APK) ---
-            path1 = os.path.join(ASSETS_DIR, filename) # "assets/13.txt"
-            path2 = filename # "13.txt"
+            # Dla Mobile (APK), używamy page.open_asset
             try:
-                filepath = path1
-                print(f"Mobile: Próba ścieżki 1 (w assets): {filepath}")
-                with page.open_asset(filepath, "r", encoding="utf-8") as f:
+                print(f"Mobile: Próba ścieżki 1 (w assets): {path1}")
+                with page.open_asset(path1, "r", encoding="utf-8") as f:
                     content = f.read()
+                print(f"Mobile: Sukces na ścieżce 1.")
             except Exception:
-                filepath = path2
-                print(f"Mobile: Ścieżka 1 nie powiodła się. Próba ścieżki 2 (w root): {filepath}")
-                with page.open_asset(filepath, "r", encoding="utf-8") as f:
+                print(f"Mobile: Ścieżka 1 nie powiodła się. Próba ścieżki 2 (w root): {path2}")
+                with page.open_asset(path2, "r", encoding="utf-8") as f:
                     content = f.read()
+                print(f"Mobile: Sukces na ścieżce 2.")
         
         elif page.web:
-            # --- Logika dla Web (GitHub Pages) ---
-            path1 = f"/{ASSETS_DIR}/{filename}" # "/assets/13.txt" (Oficjalna droga)
-            path2 = f"/{filename}" # "/13.txt" (Droga z inspekcji artefaktu)
-            try:
-                filepath = path1
-                print(f"Web: Próba ścieżki 1 (w /assets): {filepath}")
-                with open(filepath, "r", encoding="utf-8") as f:
-                    content = f.read()
-            except Exception:
-                filepath = path2
-                print(f"Web: Ścieżka 1 nie powiodła się. Próba ścieżki 2 (w /root): {filepath}")
-                with open(filepath, "r", encoding="utf-8") as f:
-                    content = f.read()
+            # Dla Web (przeglądarki), używamy standardowego open()
+            
+            # Logika z `main.yml` (`--assets .` i `/base/url/`) pakuje:
+            # - folder `assets` do `/assets/`
+            # - pliki .txt do `/` (katalog główny)
+            
+            # Dlatego path1 (assets) prawdopodobnie zawiedzie, a path2 (root) zadziała.
+            
+            # Ścieżka 1: Próba otwarcia z folderu assets (ścieżka WZGLĘDNA)
+            path1_web = f"{ASSETS_DIR}/{filename}" # np. "assets/20.txt"
+            
+            # --- KLUCZOWA POPRAWKA TUTAJ ---
+            # Ścieżka 2: Próba otwarcia z katalogu głównego (ścieżka WZGLĘDNA)
+            # Poprzednio było f"/{filename}" (absolutna), co powodowało błąd Errno 44
+            path2_web = filename # np. "20.txt"
 
-        else:
-            # --- Logika dla PC (PyCharm) ---
-            path1 = os.path.join(ASSETS_DIR, filename) # "assets/13.txt"
-            path2 = filename # "13.txt" (jeśli plik byłby obok main.py)
             try:
-                filepath = path1
-                print(f"Desktop: Próba ścieżki 1 (w assets): {filepath}")
-                with open(filepath, "r", encoding="utf-8") as f:
+                print(f"Web: Próba ścieżki 1 (w assets): {path1_web}")
+                with open(path1_web, "r", encoding="utf-8") as f:
                     content = f.read()
-            except Exception:
-                filepath = path2
-                print(f"Desktop: Ścieżka 1 nie powiodła się. Próba ścieżki 2 (w root): {filepath}")
-                with open(filepath, "r", encoding="utf-8") as f:
+                print(f"Web: Sukces na ścieżce 1.")
+            except FileNotFoundError:
+                print(f"Web: Ścieżka 1 nie powiodła się. Próba ścieżki 2 (w root): {path2_web}")
+                with open(path2_web, "r", encoding="utf-8") as f:
                     content = f.read()
-        # --- KONIEC OSTATECZNEJ "OGÓLNEJ" LOGIKI ---
+                print(f"Web: Sukces na ścieżce 2.")
+        
+        else:
+            # Dla lokalnego PC
+            try:
+                print(f"PC: Próba ścieżki 1 (w assets): {path1}")
+                with open(path1, "r", encoding="utf-8") as f:
+                    content = f.read()
+                print(f"PC: Sukces na ścieżce 1.")
+            except FileNotFoundError:
+                print(f"PC: Ścieżka 1 nie powiodła się. Próba ścieżki 2 (w root): {path2}")
+                with open(path2, "r", encoding="utf-8") as f:
+                    content = f.read()
+                print(f"PC: Sukces na ścieżce 2.")
 
     except Exception as e:
-        # Ten błąd pojawi się tylko jeśli OBIE ścieżki zawiodą
-        print(f"KRYTYCZNY BŁĄD: Nie można otworzyć pliku ani na ścieżce 1, ani na 2. Ostatnia próba: {filepath}. Platforma: {page.platform}, Web: {page.web}. Błąd: {e}")
+        # Błąd ostateczny - jeśli obie ścieżki zawiodą
+        print(f"KRYTYCZNY BŁĄD: Nie można otworzyć pliku ani na ścieżce 1, ani na 2. Ostatnia próba: {path2}. Platforma: {page.platform}, Web: {page.web}. Błąd: {e}")
         return []
 
-    # Dzielimy plik na bloki na podstawie numeru pytania (np. "01.", "02.", "10.")
+    # Dalsze parsowanie pliku (bez zmian)
     question_blocks = re.split(r'\n(?=\d+\.)', content)
 
     for block in question_blocks:
@@ -87,31 +96,23 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
         if not block:
             continue
 
-        # Stosujemy WZORZEC ELASTYCZNY do każdego pojedynczego bloku
-        # Używamy (?:...) aby grupy nieprzechwytujące nie psuły kolejności .group()
         match = re.match(
-            r"^\d+\.\s(.*?)\n"  # Grupa 1: Pytanie
-            # Elastyczna linia dla "prawidłowa odpowiedź = "
-            r"prawid(?:l|ł)owa\s+odpowied(?:z|ź)\s*=\s*(.*?)\n"  # Grupa 2: Prawidłowa odpowiedź
-            # Elastyczna linia dla "odpowiedz ABCD = "
+            r"^\d+\.\s(.*?)\n"
+            r"prawid(?:l|ł)owa\s+odpowied(?:z|ź)\s*=\s*(.*?)\n"
             r"odpowied(?:z|ź)\s+abcd\s*=\s*A\s*=\s*(.*?), B\s*=\s*(.*?), C\s*=\s*(.*?), D\s*=\s*(.*?)$",
-            block, re.DOTALL | re.IGNORECASE  # Flagi: DOTALL (. działa na linie) i IGNORECASE (ignoruj wielk. liter)
+            block, re.DOTALL | re.IGNORECASE
         )
 
         if match:
             try:
-                # Grupa 1: Pytanie
                 question = match.group(1).strip()
-                # Grupa 2: Prawidłowa odpowiedź (Teraz poprawnie)
                 correct = match.group(2).strip()
-                # Grupy 3-6: Odpowiedzi ABCD (Teraz poprawnie)
                 answers = [
                     match.group(3).strip(),
                     match.group(4).strip(),
                     match.group(5).strip(),
                     match.group(6).strip(),
                 ]
-
                 parsed_questions.append({
                     "question": question,
                     "correct": correct,
@@ -129,30 +130,17 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
 
 def normalize_answer(text: str) -> str:
     """
-    Normalizuje odpowiedź:
-    - usuwa wielkość liter
-    - usuwa spacje na początku i końcu
-    - zamienia polskie diakrytyki (ó->o, ł->l, ż/ź->z, itp.)
-    - zamienia 'u' na 'o' (zgodnie z prośbą ó-u-o)
-    - usuwa wszystkie wewnętrzne spacje (zgodnie z "mounteverest")
+    Normalizuje odpowiedź.
     """
     text = str(text).lower().strip()
-
-    # Słownik zamian diakrytyków
     diacritics = {
         'ó': 'o', 'ł': 'l', 'ż': 'z', 'ź': 'z', 'ć': 'c',
         'ń': 'n', 'ś': 's', 'ą': 'a', 'ę': 'e', 'ü': 'u'
     }
-
     for char, replacement in diacritics.items():
         text = text.replace(char, replacement)
-
-    # Zamiana 'u' na 'o' (jak w 'ó-u-o')
     text = text.replace('u', 'o')
-
-    # Usunięcie wszystkich spacji
     text = "".join(text.split())
-
     return text
 
 
@@ -168,16 +156,16 @@ def main(page: ft.Page):
     game_state = {
         "money": 10000,
         "current_question_index": -1,
-        "base_stake": 500,  # Kwota stawki za pytanie
+        "base_stake": 500,
         "abcd_unlocked": False,
-        "main_pot": 0,  # Główna pula wygranej
-        "money_spent_on_hints": 0,  # Licznik wydatków
-        "current_bid_amount": 0,  # Ile zalicytowano w tej rundzie
-        "max_bid_per_round": 5000,  # Limit licytacji na rundę
+        "main_pot": 0,
+        "money_spent_on_hints": 0,
+        "current_bid_amount": 0,
+        "max_bid_per_round": 5000,
         "current_bonus_pot": 0,
-        "active_question_set": [],  # Lista pytań załadowana z pliku
-        "total_questions": 0,  # Całkowita liczba pytań w zestawie
-        "set_name": ""  # Nazwa zestawu (np. "01")
+        "active_question_set": [],
+        "total_questions": 0,
+        "set_name": ""
     }
 
     # --- Kontrolki Flet (Elementy UI) ---
@@ -255,10 +243,10 @@ def main(page: ft.Page):
         [
             txt_answer_field,
             btn_submit_answer,
-            answers_container,  # Kontener na przyciski ABCD
+            answers_container,
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        visible=False  # Ukryty na starcie
+        visible=False
     )
 
     # --- Kontrolki UI Licytacji (grupowane) ---
@@ -270,7 +258,7 @@ def main(page: ft.Page):
     )
 
     btn_start_answering = ft.Button(
-        text="Pokaż pytanie",  # Zmieniony tekst
+        text="Pokaż pytanie",
         icon="gavel",
         on_click=None,
         width=400,
@@ -282,7 +270,7 @@ def main(page: ft.Page):
             btn_start_answering,
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        visible=False  # Ukryty na starcie
+        visible=False
     )
 
     # --- Kontrolki Podpowiedzi i Nawigacji ---
@@ -312,9 +300,9 @@ def main(page: ft.Page):
     btn_back_to_menu = ft.Button(
         text="Wróć do menu",
         icon="arrow_back",
-        on_click=None,  # Przypiszemy później
+        on_click=None,
         width=400,
-        visible=False,  # Pokażemy po zakończeniu pytania
+        visible=False,
         color="red"
     )
 
@@ -352,6 +340,7 @@ def main(page: ft.Page):
                 padding=ft.padding.only(bottom=5)
             ),
 
+            # Poprawiony kontener (usunięty błąd składni)
             ft.Container(
                 content=txt_question,
                 alignment=ft.alignment.center,
@@ -364,20 +353,19 @@ def main(page: ft.Page):
 
             ft.Divider(height=20, color="transparent"),
 
-            # ZMIANA KOLEJNOŚCI TUTAJ
             ft.Column(
                 [
                     btn_hint_5050,
                     btn_buy_abcd,
                     btn_next,
-                    txt_feedback,  # Przeniesiony tutaj
+                    txt_feedback,
                     btn_back_to_menu,
                 ],
                 spacing=10,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER
             )
         ],
-        visible=False  # Na starcie ukryty
+        visible=False
     )
 
     # --- WIDOK 2: EKRAN GŁÓWNY (MENU) ---
@@ -389,26 +377,21 @@ def main(page: ft.Page):
         text_align=ft.TextAlign.CENTER
     )
 
-    # Funkcja do tworzenia kafelków, aby uniknąć powtarzania kodu
     def create_menu_tile(index, bgcolor):
         filename = f"{index:02d}.txt"
-
-        # --- GŁÓWNA ZMIANA (z poprzedniej iteracji) ---
-        # Usunięto sprawdzanie pliku (check_file_exists).
-        # Zakładamy, że pliki 01-50 istnieją.
         
+        # Logika "na sztywno" - zakładamy, że pliki istnieją.
         return ft.Button(
             content=ft.Text(value=f"{index:02d}", size=12),
             tooltip=f"Zestaw {index:02d}",
             width=35,
             height=35,
             on_click=lambda e, f=filename: start_game_session(e, f),
-            disabled=False,  # ZAWSZE WŁĄCZONY
+            disabled=False,
             style=ft.ButtonStyle(
-                bgcolor=bgcolor # ZAWSZE KOLOROWY
+                bgcolor=bgcolor
             )
         )
-        # --- KONIEC ZMIANY ---
 
     menu_tiles_standard = [create_menu_tile(i, "blue_grey_50") for i in range(1, 31)]
     menu_tiles_popkultura = [create_menu_tile(i, "deep_purple_50") for i in range(31, 41)]
@@ -417,9 +400,8 @@ def main(page: ft.Page):
     main_menu_view = ft.Column(
         [
             ft.Text("Wybierz zestaw pytań:", size=24, weight=ft.FontWeight.BOLD),
-            # Zmieniono tekst, aby odzwierciedlić zmianę
-            ft.Text(f"Zakładam, że pliki 01-50.txt istnieją w folderze '{ASSETS_DIR}'."),
-            main_menu_feedback,  # Dodany element na błędy
+            ft.Text(f"Zakładam, że pliki 01-50.txt istnieją."),
+            main_menu_feedback,
             ft.Divider(height=20),
             ft.Row(menu_tiles_standard[0:10], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
             ft.Row(menu_tiles_standard[10:20], alignment=ft.MainAxisAlignment.CENTER, wrap=True),
@@ -437,7 +419,7 @@ def main(page: ft.Page):
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         spacing=10,
-        visible=True  # Widoczny na starcie
+        visible=True
     )
 
     # --- Funkcje Logiki Gry ---
@@ -470,7 +452,6 @@ def main(page: ft.Page):
             page.update(txt_bonus_pot)
 
     def update_question_counter():
-        """Aktualizuje licznik pytań (np. 01/50)."""
         idx = game_state["current_question_index"] + 1
         total = game_state["total_questions"]
         set_name = game_state["set_name"]
@@ -502,7 +483,7 @@ def main(page: ft.Page):
                 ft.TextButton("Wróć do menu", on_click=lambda e: go_to_main_menu(e))
             ],
             actions_alignment=ft.MainAxisAlignment.END,
-            on_dismiss=lambda e: go_to_main_menu(e)  # Domyślnie wróć do menu
+            on_dismiss=lambda e: go_to_main_menu(e)
         )
         page.dialog = dlg
         dlg.open = True
@@ -521,7 +502,6 @@ def main(page: ft.Page):
         btn_hint_5050.disabled = True
         btn_buy_abcd.disabled = True
 
-        # Nowa logika ukrywania przycisków
         toggle_answer_buttons(disabled=True)
 
         current_q = game_state["active_question_set"][game_state["current_question_index"]]
@@ -538,31 +518,27 @@ def main(page: ft.Page):
 
         if is_correct:
             game_state["money"] += pot_won
-            game_state["main_pot"] = 0  # Resetuj pulę
+            game_state["main_pot"] = 0
             txt_feedback.value = f"DOBRZE! (Podob. {similarity}%) Wygrywasz {pot_won} zł!\nPoprawna odp: {correct_text}"
             txt_feedback.color = "green"
         else:
-            game_state["main_pot"] = pot_won  # Pula zostaje
+            game_state["main_pot"] = pot_won
             txt_feedback.value = f"ŹLE... (Podob. {similarity}%) Pula {pot_won} zł przechodzi dalej.\nPoprawna odp: {correct_text}"
             txt_feedback.color = "red"
 
-        # --- NOWA LOGIKA UKRYWANIA I STYLOWANIA ABCD ---
         if game_state["abcd_unlocked"]:
             clicked_button = None
             correct_button = None
 
-            # Znajdź przyciski
             for btn in answers_container.controls:
                 if btn.data == user_input:
                     clicked_button = btn
                 if btn.data == correct_text:
                     correct_button = btn
 
-            # Ukryj wszystkie przyciski
             for btn in answers_container.controls:
                 btn.visible = False
 
-            # Pokaż i styluj ten, który kliknąłeś
             if clicked_button:
                 clicked_button.visible = True
                 if is_correct:
@@ -570,11 +546,9 @@ def main(page: ft.Page):
                 else:
                     clicked_button.style = ft.ButtonStyle(bgcolor="red_200", color="black")
 
-            # Pokaż i styluj poprawny (jeśli byłeś w błędzie i nie jest to ten sam przycisk)
             if not is_correct and correct_button:
                 correct_button.visible = True
                 correct_button.style = ft.ButtonStyle(bgcolor="green_200", color="black")
-        # --- KONIEC NOWEJ LOGIKI ---
 
         update_money_display()
         update_pot_display()
@@ -591,7 +565,6 @@ def main(page: ft.Page):
         check_answer(user_text)
 
     def handle_abcd_answer(e):
-        # Ta funkcja teraz tylko przekazuje odpowiedź. Resztę robi check_answer.
         selected_answer = e.control.data
         check_answer(selected_answer)
 
@@ -604,13 +577,11 @@ def main(page: ft.Page):
 
         hint_cost = random.randint(500, 2500)
 
-        # --- POPRAWKA TUTAJ ---
         if game_state["money"] < hint_cost:
             txt_feedback.value = f"{hint_cost}zł ? Ej mordeczko, tyle kasy to już nie masz :-)"
             txt_feedback.color = "orange"
             if page: page.update(txt_feedback)
             return
-        # --- KONIEC POPRAWKI ---
 
         game_state["money"] -= hint_cost
         game_state["money_spent_on_hints"] += hint_cost
@@ -637,13 +608,11 @@ def main(page: ft.Page):
     def buy_abcd_options(e):
         cost = random.randint(1000, 3000)
 
-        # --- POPRAWKA TUTAJ ---
         if game_state["money"] < cost:
             txt_feedback.value = f"{cost}zł ? Ej mordeczko, tyle kasy to już nie masz :-)"
             txt_feedback.color = "orange"
             if page: page.update(txt_feedback)
             return
-        # --- KONIEC POPRAWKI ---
 
         game_state["money"] -= cost
         game_state["money_spent_on_hints"] += cost
@@ -685,19 +654,14 @@ def main(page: ft.Page):
     def toggle_answer_buttons(disabled: bool):
         for btn in answers_container.controls:
             btn.disabled = disabled
-            # Pokaż je z powrotem, jeśli włączamy
             if not disabled:
                 btn.visible = True
             if disabled:
-                # Resetuj styl, ale nie widoczność
                 btn.style = ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10))
         if page:
             page.update(answers_container)
 
-    # --- Funkcje Licytacji ---
     def start_answering_and_load_question(e):
-        """Kończy licytację, WCZYTUJE i POKAZUJE pytanie, pokazuje UI odpowiedzi."""
-
         game_state["current_question_index"] += 1
 
         if game_state["current_question_index"] >= game_state["total_questions"]:
@@ -726,7 +690,6 @@ def main(page: ft.Page):
         game_state["abcd_unlocked"] = False
         answers_container.visible = False
         answers_container.controls.clear()
-        # Zresetuj widoczność przycisków ABCD
         toggle_answer_buttons(disabled=False)
         for btn in answers_container.controls:
             btn.visible = True
@@ -747,7 +710,6 @@ def main(page: ft.Page):
                         answers_container, txt_question, txt_bonus_pot)
 
     def bid_100(e):
-        """Dodaje 100 zł do puli z kasy gracza."""
         bid_amount = 100
         current_bid = game_state["current_bid_amount"]
         max_bid = game_state["max_bid_per_round"]
@@ -797,11 +759,7 @@ def main(page: ft.Page):
         if page:
             page.update(btn_bid_100, txt_feedback)
 
-    # --- Główne Funkcje Nawigacji ---
-
     def start_bidding_phase(e=None):
-        """Rozpoczyna FAZĘ LICYTACJI. Ukrywa pytanie."""
-
         stake = game_state["base_stake"]
 
         if check_game_over(stake, f"Nie masz wystarczająco pieniędzy ({stake} zł), aby rozpocząć! Koniec gry."):
@@ -818,7 +776,7 @@ def main(page: ft.Page):
         txt_feedback.value = f"Stawka {stake} zł dodana do puli. Licytuj!"
         txt_feedback.color = "black"
 
-        txt_question.visible = False  # KLUCZOWA ZMIANA
+        txt_question.visible = False
         answer_ui_container.visible = False
         btn_next.visible = False
         btn_back_to_menu.visible = False
@@ -841,7 +799,6 @@ def main(page: ft.Page):
             )
 
     def reset_game_state():
-        """Resetuje stan kasy i puli, ale NIE wczytuje pytań."""
         game_state["money"] = 10000
         game_state["current_question_index"] = -1
         game_state["main_pot"] = 0
@@ -877,10 +834,9 @@ def main(page: ft.Page):
             )
 
     def go_to_main_menu(e):
-        """Pokazuje menu główne, ukrywa widok gry."""
         game_view.visible = False
         main_menu_view.visible = True
-        main_menu_feedback.visible = False  # Ukryj błąd przy powrocie
+        main_menu_feedback.visible = False
 
         if hasattr(page, 'dialog') and page.dialog:
             page.dialog.open = False
@@ -889,7 +845,6 @@ def main(page: ft.Page):
             page.update(game_view, main_menu_view, page.dialog, main_menu_feedback)
 
     def restart_current_set(e):
-        """Resetuje stan gry i zaczyna ten sam zestaw od nowa."""
         if hasattr(page, 'dialog') and page.dialog:
             page.dialog.open = False
         reset_game_state()
@@ -898,20 +853,16 @@ def main(page: ft.Page):
             page.update()
 
     def start_game_session(e, set_filename: str):
-        """
-        Główna funkcja wczytująca zestaw pytań i przełączająca widok.
-        """
         # Przekazujemy 'page' do parsera
         loaded_questions = parse_question_file(page, set_filename)
 
-        # Logika obsługi błędów
         if not loaded_questions:
-            # Zgodnie z prośbą: jeśli plik nie istnieje lub jest pusty,
-            # to teraz jest to błąd krytyczny.
-            main_menu_feedback.value = f"BŁĄD KRYTYCZNY: Nie można wczytać pliku '{set_filename}'. Sprawdź, czy plik istnieje w 'assets' (dla PC/Mobile) lub w katalogu głównym (dla Web) i ma poprawny format."
+            # Ta logika jest teraz kluczowa. Jeśli parse_question_file zwróci [],
+            # to znaczy, że obie próby otwarcia pliku zawiodły.
+            main_menu_feedback.value = f"BŁĄD KRYTYCZNY: Nie można wczytać pliku '{set_filename}'. Plik nie został znaleziony ani w 'assets/' ani w '/'."
             main_menu_feedback.visible = True
             if page: page.update(main_menu_feedback)
-            return  # Zostajemy w menu
+            return
 
         game_state["active_question_set"] = loaded_questions
         game_state["total_questions"] = len(loaded_questions)
@@ -920,7 +871,7 @@ def main(page: ft.Page):
         reset_game_state()
 
         main_menu_view.visible = False
-        main_menu_feedback.visible = False  # Ukryj błąd po udanym wczytaniu
+        main_menu_feedback.visible = False
         game_view.visible = True
 
         start_bidding_phase()
@@ -943,7 +894,7 @@ def main(page: ft.Page):
 
 # Uruchomienie aplikacji Flet
 if __name__ == "__main__":
-    # KLUCZOWE: 'assets_dir' mówi Fletowi, aby spakował ten folder.
-    # TO JEST NAJWAŻNIEJSZA LINIA DLA WEB/APK.
+    # TA LINIA MUSI BYĆ, aby Flet wiedział, co spakować.
+    # W połączeniu z flagą `--assets .` w main.yml, to powinno
+    # poprawnie spakować pliki z katalogu głównego.
     ft.app(target=main, assets_dir=".")
-
