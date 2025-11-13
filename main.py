@@ -14,9 +14,11 @@ ASSETS_DIR = "assets"
 
 def parse_question_file(page: ft.Page, filename: str) -> list:
     """
-    Wczytuje plik .txt z folderu ASSETS_DIR i parsuje go do formatu listy pytań.
+    Wczytuje plik .txt i parsuje go do formatu listy pytań.
 
-    TA FUNKCJA JEST OSTATECZNIE POPRAWIONA - ROZRÓŻNIA PC, WEB I MOBILE.
+    NOWA, "OGÓLNA" LOGIKA:
+    Próbuje odczytać plik z 'assets/'. Jeśli się nie uda, próbuje odczytać
+    z katalogu głównego ('/'). Działa to dla PC, Web i Mobile.
     """
     parsed_questions = []
     filepath = ""  # Zmienna do śledzenia, którą ścieżkę próbowaliśmy otworzyć
@@ -25,39 +27,56 @@ def parse_question_file(page: ft.Page, filename: str) -> list:
     try:
         # Sprawdzamy, gdzie działa aplikacja
         
-        # --- OSTATECZNA LOGIKA PLIKÓW ---
+        # --- OSTATECZNA "OGÓLNA" LOGIKA ---
         if page.platform in ("android", "ios"):
-            # 1. Logika dla Mobile (APK) - używa page.open_asset
-            filepath = os.path.join(ASSETS_DIR, filename) # "assets/13.txt"
-            print(f"Mobile: Trying page.open_asset() on: {filepath}")
-            with page.open_asset(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
+            # --- Logika dla Mobile (APK) ---
+            path1 = os.path.join(ASSETS_DIR, filename) # "assets/13.txt"
+            path2 = filename # "13.txt"
+            try:
+                filepath = path1
+                print(f"Mobile: Próba ścieżki 1 (w assets): {filepath}")
+                with page.open_asset(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception:
+                filepath = path2
+                print(f"Mobile: Ścieżka 1 nie powiodła się. Próba ścieżki 2 (w root): {filepath}")
+                with page.open_asset(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
         
         elif page.web:
-            # 2. Logika dla Web (GitHub Pages)
-            # Błąd "Errno 44" i inspekcja artefaktu dowiodły, 
-            # że pliki są w roocie (/), a nie w /assets/
-            
-            # --- ZMIANA NA ŻYCZENIE (na podstawie inspekcji artefaktu) ---
-            # Usuwamy ASSETS_DIR ze ścieżki, aby celować w root.
-            filepath = f"/{filename}" # np. "/13.txt"
-            print(f"Web: Trying open() on absolute ROOT path: {filepath}")
-            # --- KONIEC ZMIANY ---
-
-            with open(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
+            # --- Logika dla Web (GitHub Pages) ---
+            path1 = f"/{ASSETS_DIR}/{filename}" # "/assets/13.txt" (Oficjalna droga)
+            path2 = f"/{filename}" # "/13.txt" (Droga z inspekcji artefaktu)
+            try:
+                filepath = path1
+                print(f"Web: Próba ścieżki 1 (w /assets): {filepath}")
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception:
+                filepath = path2
+                print(f"Web: Ścieżka 1 nie powiodła się. Próba ścieżki 2 (w /root): {filepath}")
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
 
         else:
-            # 3. Logika dla PC (PyCharm) - domyślna
-            filepath = os.path.join(ASSETS_DIR, filename) # "assets/13.txt"
-            print(f"Desktop: Trying open() on relative path: {filepath}")
-            with open(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
-        # --- KONIEC OSTATECZNEJ LOGIKI ---
+            # --- Logika dla PC (PyCharm) ---
+            path1 = os.path.join(ASSETS_DIR, filename) # "assets/13.txt"
+            path2 = filename # "13.txt" (jeśli plik byłby obok main.py)
+            try:
+                filepath = path1
+                print(f"Desktop: Próba ścieżki 1 (w assets): {filepath}")
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception:
+                filepath = path2
+                print(f"Desktop: Ścieżka 1 nie powiodła się. Próba ścieżki 2 (w root): {filepath}")
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+        # --- KONIEC OSTATECZNEJ "OGÓLNEJ" LOGIKI ---
 
     except Exception as e:
-        # Zostawiamy jeden, uniwersalny blok błędu, który pokaże nam ścieżkę
-        print(f"KRYTYCZNY BŁĄD: Nie można otworzyć pliku {filepath}. Platforma: {page.platform}, Web: {page.web}. Błąd: {e}")
+        # Ten błąd pojawi się tylko jeśli OBIE ścieżki zawiodą
+        print(f"KRYTYCZNY BŁĄD: Nie można otworzyć pliku ani na ścieżce 1, ani na 2. Ostatnia próba: {filepath}. Platforma: {page.platform}, Web: {page.web}. Błąd: {e}")
         return []
 
     # Dzielimy plik na bloki na podstawie numeru pytania (np. "01.", "02.", "10.")
@@ -334,6 +353,8 @@ def main(page: ft.Page):
             ),
 
             ft.Container(
+                content=txt_question,
+                alignment=ftim=ft.Container(
                 content=txt_question,
                 alignment=ft.alignment.center,
                 padding=ft.padding.only(left=20, right=20, top=10, bottom=10),
@@ -882,14 +903,14 @@ def main(page: ft.Page):
         """
         Główna funkcja wczytująca zestaw pytań i przełączająca widok.
         """
-        # POPRAWKA: Przekazujemy 'page' do parsera
+        # Przekazujemy 'page' do parsera
         loaded_questions = parse_question_file(page, set_filename)
 
-        # POPRAWKA: Logika obsługi błędów
+        # Logika obsługi błędów
         if not loaded_questions:
             # Zgodnie z prośbą: jeśli plik nie istnieje lub jest pusty,
             # to teraz jest to błąd krytyczny.
-            main_menu_feedback.value = f"BŁĄD KRYTYCZNY: Nie można wczytać pliku '{set_filename}'. Sprawdź, czy plik istnieje w 'assets' i ma poprawny format. Aplikacja nie może kontynuować."
+            main_menu_feedback.value = f"BŁĄD KRYTYCZNY: Nie można wczytać pliku '{set_filename}'. Sprawdź, czy plik istnieje w 'assets' (dla PC/Mobile) lub w katalogu głównym (dla Web) i ma poprawny format."
             main_menu_feedback.visible = True
             if page: page.update(main_menu_feedback)
             return  # Zostajemy w menu
